@@ -8,9 +8,11 @@ from typing import Deque, Dict, List, Optional, Union
 import numpy as np
 import torch
 from PIL import Image
+from fractions import Fraction
+import av
 
 
-LOGGER = logging.getLogger("rtc_stream.frame_bridge")
+LOGGER = logging.getLogger("comfyui_trickle.frame_bridge")
 
 
 class FrameBridge:
@@ -27,6 +29,26 @@ class FrameBridge:
         self._dropped_before_loop = 0
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        # If attaching to a new/different loop, recreate the queue
+        # This prevents "Queue bound to different event loop" errors
+        if self.loop is not loop:
+            # Drain any items from the old queue into the buffer first
+            if self.loop is not None:
+                try:
+                    while True:
+                        frame = self.queue.get_nowait()
+                        self._buffer.append(frame)
+                except QueueEmpty:
+                    pass
+                LOGGER.info(
+                    "FrameBridge detaching from old loop, saved %d frames to buffer",
+                    len(self._buffer),
+                )
+            
+            # Create a new queue for the new loop
+            self.queue = asyncio.Queue(maxsize=self.max_size)
+            LOGGER.info("FrameBridge created new queue for loop %s", loop)
+        
         self.loop = loop
         LOGGER.info("FrameBridge attached to loop %s", loop)
         if self._buffer:
@@ -71,12 +93,7 @@ class FrameBridge:
         if frame.dtype != np.uint8:
             frame = np.clip(frame, 0, 255).astype(np.uint8)
         self._schedule_put(frame[:, :, :3])
-        LOGGER.info(
-            "FrameBridge queued frame %sx%s (depth=%s)",
-            frame.shape[1],
-            frame.shape[0],
-            self.depth(),
-        )
+        print(f"FrameBridge queued frame {frame.shape[1]}x{frame.shape[0]} (depth={self.depth()})")
 
     def try_get_nowait(self) -> Optional[np.ndarray]:
         try:
@@ -94,6 +111,25 @@ class FrameBridge:
             "depth": self.depth(),
             "dropped_before_loop": self._dropped_before_loop,
         }
+
+    def reset(self) -> None:
+        """
+        Reset the bridge state, clearing the queue and loop reference.
+        Call this when stopping a stream to ensure clean state for next stream.
+        """
+        # Drain queue into buffer for potential reuse
+        try:
+            while True:
+                frame = self.queue.get_nowait()
+                self._buffer.append(frame)
+        except QueueEmpty:
+            pass
+        
+        # Clear the loop reference so next attach_loop creates fresh queue
+        self.loop = None
+        # Create a fresh queue (not bound to any loop)
+        self.queue = asyncio.Queue(maxsize=self.max_size)
+        LOGGER.info("FrameBridge reset (buffered=%d frames)", len(self._buffer))
 
 
 FRAME_BRIDGE = FrameBridge()
@@ -149,6 +185,30 @@ def enqueue_tensor_frame(tensor: torch.Tensor) -> None:
     enqueue_array_frame(tensor_to_uint8_frame(tensor))
 
 
+def normalize_uint8_frame(frame: np.ndarray) -> np.ndarray:
+    """
+    Ensure an ndarray is RGB uint8.
+    """
+    if frame.ndim != 3 or frame.shape[2] not in (3, 4):
+        raise ValueError("frame must be HxWxC RGB/RGBA")
+    normalized = frame[:, :, :3]
+    if normalized.dtype != np.uint8:
+        normalized = np.clip(normalized, 0, 255).astype(np.uint8)
+    return normalized
+
+
+def array_to_av_frame(frame: np.ndarray, *, pts: int, fps: float, width: int, height: int) -> av.VideoFrame:
+    """
+    Convert a numpy RGB frame into a yuv420p av.VideoFrame with PTS/time_base set.
+    """
+    rgb = normalize_uint8_frame(frame)
+    video_frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+    video_frame = video_frame.reformat(width=width, height=height, format="yuv420p")
+    video_frame.pts = pts
+    video_frame.time_base = Fraction(1, int(round(fps)))
+    return video_frame
+
+
 def enqueue_file_frame(image_path: Union[str, Path]) -> None:
     """
     Load an image from disk and enqueue it into the frame bridge.
@@ -174,7 +234,7 @@ def queue_stats() -> Dict[str, int]:
 
 class FolderFrameSource:
     IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
-    OUTPUT_DIR = Path(__file__).resolve().parents[3] / "output"
+    OUTPUT_DIR = Path(__file__).resolve().parents[4] / "output"
 
     def __init__(self) -> None:
         self.files: List[Path] = []
@@ -208,4 +268,3 @@ class FolderFrameSource:
         except Exception as exc:  # pragma: no cover - IO heavy
             LOGGER.warning("Failed to load folder frame %s: %s", path, exc)
             return None
-

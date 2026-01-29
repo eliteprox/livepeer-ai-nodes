@@ -1,11 +1,14 @@
 """
-RTC Node package initialization.
+ComfyUI Trickle Streaming custom nodes package initialization.
 
-Ensures ComfyUI discovers custom nodes under `nodes` and loads the sidebar JS.
+Ensures ComfyUI discovers custom nodes under `nodes`.
 """
 
 import sys
+import logging
 from pathlib import Path
+
+LOGGER = logging.getLogger("comfyui-rtc")
 
 ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
@@ -13,15 +16,13 @@ if str(ROOT_DIR) not in sys.path:
 
 WEB_DIRECTORY = "./nodes/js"
 
-try:
-    from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
-except ImportError:
-    # When tests import this file as a top-level module, fall back to absolute import.
-    from nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+# Import nodes - let errors propagate so they're visible in ComfyUI logs
+from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+
+LOGGER.info("comfyui-rtc loaded %d nodes: %s", len(NODE_CLASS_MAPPINGS), list(NODE_CLASS_MAPPINGS.keys()))
 
 __all__ = [
     "NODE_CLASS_MAPPINGS",
     "NODE_DISPLAY_NAME_MAPPINGS",
     "WEB_DIRECTORY",
 ]
-

@@ -1,60 +1,153 @@
-# StreamProcessor Docs
+# Documentation
 
-## Launching for Local Testing
+## Overview
 
-Before launching anything, copy the sample environment and set your Daydream credentials:
+This directory contains detailed documentation for the ComfyUI Trickle Streaming custom node package.
 
-```powershell
-Copy-Item .env.example .env -Force
-notepad .env  # update DAYDREAM_API_KEY
+## Documents
+
+### [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+Technical architecture documentation covering:
+- System architecture and data flow
+- Core components (nodes, controllers, bridges)
+- Thread safety and synchronization
+- Error handling strategies
+- Performance characteristics
+- Testing guidelines
+
+## Quick Links
+
+- [Main README](../README.md) - Installation and quick start guide
+- [Workflows](../workflows/) - Example workflow files
+- [Tests](../tests/) - Unit tests and test documentation
+
+## Key Concepts
+
+### Trickle Protocol
+
+The trickle protocol is a lightweight streaming protocol used by Livepeer for real-time media publishing and subscribing:
+- **Publish**: Upload frames to orchestrator via HTTP chunks
+- **Subscribe**: Download processed frames via HTTP chunks
+- **Stateless**: No WebRTC signaling required
+
+### Frame Bridge
+
+Thread-safe queue that bridges ComfyUI's synchronous execution with the asyncio-based streaming controller:
+- Accepts frames from ComfyUI nodes (main thread)
+- Provides frames to publisher loop (asyncio thread)
+- Buffers frames when loop not ready
+- Resets cleanly between stream sessions
+
+### Network Controller
+
+Manages the streaming lifecycle:
+- Creates asyncio loop in background thread
+- Publishes frames at target FPS
+- Monitors orchestrator events
+- Handles errors and state transitions
+- Provides health checks for nodes
+
+### Pipeline Configuration
+
+Validates and formats StreamDiffusion pipeline parameters:
+- Model selection
+- Prompts and guidance
+- ControlNet attachments
+- Inference parameters
+- Schema validation
+
+## Development
+
+### Adding New Nodes
+
+1. Define node class in `nodes/frame_nodes.py` or new module
+2. Implement `INPUT_TYPES`, `RETURN_TYPES`, `FUNCTION`
+3. Add to `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`
+4. Set appropriate `CATEGORY` (use "Trickle" prefix)
+5. Add tests if applicable
+
+### Debugging
+
+**Enable debug logging:**
+```python
+import logging
+logging.getLogger("comfyui_trickle").setLevel(logging.DEBUG)
 ```
 
-```bash
-cp .env.example .env
-${EDITOR:-nano} .env   # update DAYDREAM_API_KEY
+**Check logs:**
+- Frame bridge queue depth
+- Publisher/subscriber state changes
+- Network errors
+- Frame timing
+
+## API Reference
+
+### Frame Bridge API
+
+```python
+from nodes.stream.frame_bridge import (
+    enqueue_tensor_frame,  # Enqueue ComfyUI tensor
+    enqueue_array_frame,   # Enqueue numpy array
+    queue_depth,           # Get current queue size
+    has_loop,              # Check if asyncio loop attached
+    FRAME_BRIDGE,          # Global bridge instance
+)
 ```
 
-Use the `StreamProcessor API Server` configuration in `.vscode/launch.json` to start the FastAPI service without ComfyUI. It already points at your default `pipeline_config.json`, the fallback `test.mp4`, and exposes the Daydream credentials via environment variables, so hitting Debug ▶️ will:
+### Network Controller API
 
-- initialize `StreamController` and `WhepController`
-- listen on `http://127.0.0.1:8895`
-- attach `FRAME_BRIDGE` to the event loop for frame delivery
+```python
+from nodes.stream.network_controller import (
+    NetworkController,
+    NetworkControllerConfig,
+)
 
-> If you need to try a different pipeline, edit `pipeline_config.json` or pass `pipeline_config` in the `/start` payload. Use `pip install -r requirements-standalone.txt` before debugging if your environment lacks PyTorch.
+config = NetworkControllerConfig(
+    orchestrator_url="https://orch.example.com:8936",
+    signer_url="http://signer.example.com:8081",
+    model_id="noop",
+    fps=30.0,
+    frame_width=512,
+    frame_height=512,
+    keyframe_interval_s=2.0,
+)
 
-## cURL Smoke Tests
-
-```
-# start a stream (uses cached pipeline_config.json)
-curl -s -X POST http://127.0.0.1:8895/start \
-  -H "Content-Type: application/json" \
-  -d '{"stream_name":"local-debug"}' | jq
-
-# watch current state
-curl -s http://127.0.0.1:8895/status | jq
-
-# stop the stream
-curl -s -X POST http://127.0.0.1:8895/stop | jq
-
-# push a PNG frame manually
-python - <<'PY' > /tmp/frame_b64.txt
-import base64, io
-from PIL import Image
-
-img = Image.new("RGB", (640, 360), (255, 128, 0))
-buffer = io.BytesIO()
-img.save(buffer, format="PNG")
-print(base64.b64encode(buffer.getvalue()).decode("ascii"))
-PY
-
-curl -s -X POST http://127.0.0.1:8895/frames \
-  -H "Content-Type: application/json" \
-  --data "{\"frame_b64\":\"$(cat /tmp/frame_b64.txt)\"}" | jq
+controller = NetworkController(config)
+status = controller.start(model_id="noop", params={})
+print(status["publish_url"])
 ```
 
-`jq` is optional but helpful to map keys like `phase`, `frames_sent`, and `remote_status`.
+### Network Configuration API
 
-## Architecture Reference
+```python
+from nodes.stream.credentials import resolve_network_config
 
-See `docs/ARCHITECTURE.md` for the signal-flow diagram and explanations of the FastAPI routes, controllers, and lifecycle responsibilities. This is the same content that used to live at the repository root.
+orch_url, signer_url = resolve_network_config(
+    orchestrator_url="https://custom-orch:8936",
+    signer_url="http://custom-signer:8081",
+)
+```
 
+Resolves orchestrator and signer URLs from:
+1. Explicit parameters (from TrickleConfig node)
+2. Environment variables (`ORCHESTRATOR_URL`, `SIGNER_URL`)
+3. Hardcoded defaults
+
+## Contributing
+
+When contributing to this project:
+
+1. Follow existing code style
+2. Add tests for new features
+3. Update documentation
+4. Keep imports at the top of files
+5. Use type hints where applicable
+6. Add docstrings to public APIs
+
+## Support
+
+For issues and feature requests:
+- Check [Issues](../../issues) on GitHub
+- Review [Discussions](../../discussions)
+- See [Troubleshooting](../README.md#troubleshooting) in main README
