@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 
 
-LOGGER = logging.getLogger("rtc_stream.trickle_output_bridge")
+LOGGER = logging.getLogger("comfyui_trickle.trickle_output_bridge")
 
 
 class TrickleOutputBridge:
@@ -121,5 +121,3 @@ class TrickleOutputBridge:
 
 
 TRICKLE_OUTPUT_BRIDGE = TrickleOutputBridge()
-
-

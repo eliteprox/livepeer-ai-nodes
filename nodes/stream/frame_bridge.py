@@ -12,7 +12,7 @@ from fractions import Fraction
 import av
 
 
-LOGGER = logging.getLogger("rtc_stream.frame_bridge")
+LOGGER = logging.getLogger("comfyui_trickle.frame_bridge")
 
 
 class FrameBridge:
@@ -234,7 +234,7 @@ def queue_stats() -> Dict[str, int]:
 
 class FolderFrameSource:
     IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
-    OUTPUT_DIR = Path(__file__).resolve().parents[3] / "output"
+    OUTPUT_DIR = Path(__file__).resolve().parents[4] / "output"
 
     def __init__(self) -> None:
         self.files: List[Path] = []
@@ -268,4 +268,3 @@ class FolderFrameSource:
         except Exception as exc:  # pragma: no cover - IO heavy
             LOGGER.warning("Failed to load folder frame %s: %s", path, exc)
             return None
-

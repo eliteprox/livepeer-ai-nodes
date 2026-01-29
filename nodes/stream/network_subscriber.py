@@ -10,7 +10,7 @@ from livepeer_gateway.media_output import MediaOutput
 
 from .trickle_output_bridge import TRICKLE_OUTPUT_BRIDGE
 
-LOGGER = logging.getLogger("rtc_stream.network_subscriber")
+LOGGER = logging.getLogger("comfyui_trickle.network_subscriber")
 
 
 @dataclass

@@ -7,7 +7,7 @@ pydantic>=2.8.0
 pillow>=10.3.0
 python-dotenv>=1.0.1
 comfyui-frontend-package>=1.32.5
-livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@600de883fb972f960af595a5e03c455b17f149e5
+livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@27da07305a30cf100e3a729a7e58ede8a79369e5
 
 torch
 torchvision

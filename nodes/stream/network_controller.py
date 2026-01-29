@@ -30,7 +30,7 @@ from livepeer_gateway.orchestrator import (
 
 from .frame_bridge import FRAME_BRIDGE, array_to_av_frame, normalize_uint8_frame
 
-LOGGER = logging.getLogger("rtc_stream.network_controller")
+LOGGER = logging.getLogger("comfyui_trickle.network_controller")
 
 
 def _ensure_allow_http_signer() -> None:

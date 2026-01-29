@@ -1,21 +1,7 @@
 """
-Register the Web UI preview node so ComfyUI loads the accompanying JS extension.
+JavaScript extensions for ComfyUI.
+No Python nodes are registered from this module.
 """
 
-
-class RTCStreamUIPreview:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {}, "optional": {}}
-
-    RETURN_TYPES = ()
-    FUNCTION = "run"
-    CATEGORY = "RTC Stream"
-
-    def run(self):
-        return ()
-
-
-NODE_CLASS_MAPPINGS = {"RTCStreamUIPreview": RTCStreamUIPreview}
-NODE_DISPLAY_NAME_MAPPINGS = {"RTCStreamUIPreview": "RTC Stream UI"}
-
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
