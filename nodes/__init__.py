@@ -1,7 +1,7 @@
 import logging
 import sys
 
-from . import frame_nodes, js
+from . import frame_nodes, stream_url_node, js
 
 
 def _configure_logging():
@@ -24,6 +24,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 
 NODE_CLASS_MAPPINGS.update(frame_nodes.NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(frame_nodes.NODE_DISPLAY_NAME_MAPPINGS)
+NODE_CLASS_MAPPINGS.update(stream_url_node.NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(stream_url_node.NODE_DISPLAY_NAME_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(js.NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(js.NODE_DISPLAY_NAME_MAPPINGS)
 
