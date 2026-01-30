@@ -2,7 +2,7 @@
 [project]
 name = "livepeer-ai-nodes" # Unique identifier for your node. Immutable after creation.
 description = "Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Frames are published directly to orchestrators and outputs are pulled via trickle subscribe."
-version = "1.0.0" # Custom Node version. Must be semantically versioned.
+version = "1.0.1" # Custom Node version. Must be semantically versioned.
 # license = { file = "LICENSE.txt" } # Uncomment and add LICENSE.txt file if needed
 dependencies = [
     "av>=14.0.0",
@@ -27,4 +27,4 @@ Repository = "https://github.com/eliteprox/livepeer-ai-nodes"
 [tool.comfy]
 PublisherId = "livepeer-comfystream"
 DisplayName = "Livepeer AI Streaming"
-Icon = "https://raw.githubusercontent.com/eliteprox/livepeer-ai-nodes/main/docs/icon.png" # SVG, PNG, JPG or GIF (MAX. 800x400px)
+Icon = "https://raw.githubusercontent.com/livepeer/comfystream-docs/main/logo/icon-light-120px.svg" # SVG, PNG, JPG or GIF (MAX. 800x400px)
