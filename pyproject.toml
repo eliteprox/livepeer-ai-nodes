@@ -1,0 +1,30 @@
+# pyproject.toml
+[project]
+name = "livepeer-ai-nodes" # Unique identifier for your node. Immutable after creation.
+description = "Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Frames are published directly to orchestrators and outputs are pulled via trickle subscribe."
+version = "1.0.0" # Custom Node version. Must be semantically versioned.
+# license = { file = "LICENSE.txt" } # Uncomment and add LICENSE.txt file if needed
+dependencies = [
+    "av>=14.0.0",
+    "numpy>=2.0.0",
+    "opencv-python>=4.5.0",
+    "requests>=2.32.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.8.0",
+    "pillow>=10.3.0",
+    "python-dotenv>=1.0.1",
+    "comfyui-frontend-package>=1.32.5",
+    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@50fad68b19282b25123a373cfb3bd8678acefbb7",
+    "torch",
+    "torchvision",
+    "torchaudio",
+]
+
+[project.urls]
+Repository = "https://github.com/eliteprox/livepeer-ai-nodes"
+
+[tool.comfy]
+PublisherId = "livepeer-comfystream"
+DisplayName = "Livepeer AI Streaming"
+Icon = "https://raw.githubusercontent.com/eliteprox/livepeer-ai-nodes/main/docs/icon.png" # SVG, PNG, JPG or GIF (MAX. 800x400px)
