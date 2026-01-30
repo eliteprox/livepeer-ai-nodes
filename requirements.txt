@@ -7,8 +7,9 @@ uvicorn>=0.30.0
 pydantic>=2.8.0
 pillow>=10.3.0
 python-dotenv>=1.0.1
+aiohttp>=3.9.0
 comfyui-frontend-package>=1.32.5
-livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@50fad68b19282b25123a373cfb3bd8678acefbb7
+livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@d7c0bd2bc03bd9099eabdd4c164f1715d973d2c8
 
 torch
 torchvision

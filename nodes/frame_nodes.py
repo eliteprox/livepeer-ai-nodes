@@ -29,6 +29,7 @@ class _NetworkRuntime:
     controller: Optional[NetworkController] = None
     subscriber: Optional[NetworkSubscriber] = None
     last_startup_error: Optional[str] = None  # Track startup failures
+    last_subscribe_url: Optional[str] = None  # Track URL to detect stream changes
 
 
 _NETWORK_RUNTIME = _NetworkRuntime()
@@ -338,8 +339,13 @@ class StartTrickleStream:
                 LOGGER.warning("Failed to stop subscriber: %s", exc)
             _NETWORK_RUNTIME.subscriber = None
         
-        # Reset the frame bridge to clear old loop bindings
+        # Clear the tracked URL so next start is treated as fresh
+        _NETWORK_RUNTIME.last_subscribe_url = None
+        
+        # Reset both frame bridges to clear old data
         FRAME_BRIDGE.reset()
+        TRICKLE_OUTPUT_BRIDGE.reset_sync()
+        LOGGER.info("StartTrickleStream: Reset frame bridges (input and output)")
         
         # Reset instance state
         self._status_cache = ("", "", "", "Stream stopped")
@@ -481,6 +487,11 @@ class StartTrickleStream:
             needs_restart = True
 
         if needs_restart:
+            # Note: Don't reset TRICKLE_OUTPUT_BRIDGE here - that would cause black frames
+            # during startup. The subscriber handles resetting when the URL changes (i.e.,
+            # when connecting to a genuinely different stream). For same-stream reconnects,
+            # keeping the last frame is better UX than showing black.
+            
             try:
                 status = controller.start(
                     model_id=model_id,
@@ -501,9 +512,18 @@ class StartTrickleStream:
                 )
 
                 # Start subscriber if subscribe_url is present (only on restart)
-                if status.get("subscribe_url"):
+                new_subscribe_url = status.get("subscribe_url")
+                if new_subscribe_url:
+                    # Check if this is a different stream than before - if so, clear old frames
+                    if _NETWORK_RUNTIME.last_subscribe_url and _NETWORK_RUNTIME.last_subscribe_url != new_subscribe_url:
+                        LOGGER.info(
+                            "StartTrickleStream: Subscribe URL changed, clearing stale output frames"
+                        )
+                        TRICKLE_OUTPUT_BRIDGE.reset_sync()
+                    _NETWORK_RUNTIME.last_subscribe_url = new_subscribe_url
+                    
                     subscriber = _get_subscriber(start_seq, controller.loop)
-                    subscriber.start(status["subscribe_url"])
+                    subscriber.start(new_subscribe_url)
             except Exception as exc:
                 # Handle connection/timeout errors gracefully
                 error_str = str(exc)
@@ -616,8 +636,16 @@ class LoadVideoStream:
         if controller:
             controller.stop_file_feed()
         
+        _NETWORK_RUNTIME.last_subscribe_url = None
+        
+        # Reset both frame bridges to clear old data
+        FRAME_BRIDGE.reset()
+        TRICKLE_OUTPUT_BRIDGE.reset_sync()
+        LOGGER.info("StartTrickleStream: Reset frame bridges (input and output)")
+        
         # Delegate to StartTrickleStream's stop logic for full cleanup
         return self._starter._stop_stream()
+
 
     def start_stream_from_video(
         self,

@@ -2,7 +2,7 @@
 [project]
 name = "livepeer-ai-nodes" # Unique identifier for your node. Immutable after creation.
 description = "Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Frames are published directly to orchestrators and outputs are pulled via trickle subscribe."
-version = "1.0.1" # Custom Node version. Must be semantically versioned.
+version = "1.0.2" # Custom Node version. Must be semantically versioned.
 # license = { file = "LICENSE.txt" } # Uncomment and add LICENSE.txt file if needed
 dependencies = [
     "av>=14.0.0",
@@ -14,8 +14,9 @@ dependencies = [
     "pydantic>=2.8.0",
     "pillow>=10.3.0",
     "python-dotenv>=1.0.1",
+    "aiohttp>=3.9.0",
     "comfyui-frontend-package>=1.32.5",
-    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@50fad68b19282b25123a373cfb3bd8678acefbb7",
+    "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@d7c0bd2bc03bd9099eabdd4c164f1715d973d2c8",
     "torch",
     "torchvision",
     "torchaudio",

@@ -75,8 +75,8 @@ class NetworkSubscriber:
             raise RuntimeError("NetworkSubscriber requires an attached asyncio loop")
         self.stop()
         
-        # Note: Don't reset TRICKLE_OUTPUT_BRIDGE here - keep displaying the last frame
-        # until new frames arrive. Only reset when explicitly stopping the stream.
+        # Note: URL change detection and bridge reset is now handled at the runtime level
+        # in frame_nodes.py (StartTrickleStream) before calling this method.
         
         self._running = True
         self.frames_received = 0
