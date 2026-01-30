@@ -2,15 +2,17 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import folder_paths
 import numpy as np
 import torch
+import cv2
 
 from .stream.credentials import resolve_network_config
-from .stream.frame_bridge import enqueue_tensor_frame, queue_depth, has_loop, FRAME_BRIDGE
+from .stream.frame_bridge import enqueue_tensor_frame, enqueue_tensor_batch, queue_depth, has_loop, FRAME_BRIDGE
 from .stream.network_controller import NetworkController, NetworkControllerConfig
 from .stream.network_subscriber import NetworkSubscriber, NetworkSubscriberConfig
 from .stream.trickle_output_bridge import TRICKLE_OUTPUT_BRIDGE
@@ -30,6 +32,117 @@ class _NetworkRuntime:
 
 
 _NETWORK_RUNTIME = _NetworkRuntime()
+
+
+# --- Capture nodes ---
+
+
+class WebcamFrameBatcher:
+    """
+    Takes single frames from WebcamCapture and accumulates them into batches.
+    Lightweight implementation to avoid CPU overhead from hashing/serialization.
+    """
+
+    _frame_buffer: list[tuple[torch.Tensor, float]] = []  # (tensor, timestamp)
+    _max_buffer_size: int = 64  # Prevent infinite accumulation
+    _last_batch_time: float = 0.0
+    _buffer_timeout: float = 5.0  # Clear buffer if no batch output for 5 seconds
+
+    @classmethod
+    def INPUT_TYPES(cls) -> Dict[str, Any]:
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "batch_size": ("INT", {
+                    "default": 8,
+                    "min": 1,
+                    "max": 32,
+                    "tooltip": "Number of frames to accumulate before outputting a batch"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    FUNCTION = "batch_frames"
+    CATEGORY = "Trickle"
+    OUTPUT_NODE = False
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        # Always re-executes to keep accumulating frames
+        return float("nan")
+
+    def batch_frames(
+        self,
+        image: torch.Tensor,
+        batch_size: int = 8,
+    ):
+        """
+        Accumulate frames from WebcamCapture and output batches when ready.
+        Minimal work per frame to keep CPU overhead low.
+        """
+        current_time = time.perf_counter()
+        
+        # Auto-reset buffer if it's been too long since last batch (ensures fresh frames)
+        if WebcamFrameBatcher._last_batch_time > 0 and (current_time - WebcamFrameBatcher._last_batch_time) > WebcamFrameBatcher._buffer_timeout:
+            LOGGER.info(
+                "WebcamFrameBatcher: Buffer timeout (%.1fs), clearing stale frames for temporal consistency",
+                current_time - WebcamFrameBatcher._last_batch_time
+            )
+            WebcamFrameBatcher._frame_buffer = []
+            WebcamFrameBatcher._last_frame_hash = None
+            WebcamFrameBatcher._last_batch_time = current_time
+        
+        # Add incoming frame to buffer with timestamp (no hashing to avoid CPU cost)
+        WebcamFrameBatcher._frame_buffer.append((image, current_time))
+        
+        # Keep only the most recent frames to avoid reusing stale frames
+        if len(WebcamFrameBatcher._frame_buffer) > WebcamFrameBatcher._max_buffer_size:
+            WebcamFrameBatcher._frame_buffer = WebcamFrameBatcher._frame_buffer[-WebcamFrameBatcher._max_buffer_size:]
+            LOGGER.warning(
+                "WebcamFrameBatcher: Buffer exceeded max size, dropped oldest frames (current: %d)",
+                len(WebcamFrameBatcher._frame_buffer)
+            )
+        
+        # If we have enough frames, emit the most recent batch_size frames and clear buffer
+        if len(WebcamFrameBatcher._frame_buffer) >= batch_size:
+            batch_data = WebcamFrameBatcher._frame_buffer[-batch_size:]
+            batch_frames = [tensor for tensor, _ in batch_data]
+            
+            # Clear buffer after emitting to avoid replaying old frames
+            WebcamFrameBatcher._frame_buffer = []
+            
+            # Check for temporal consistency (detect if frames are out of order)
+            timestamps = [ts for _, ts in batch_data]
+            if len(timestamps) > 1:
+                for i in range(1, len(timestamps)):
+                    if timestamps[i] < timestamps[i-1]:
+                        LOGGER.warning(
+                            "WebcamFrameBatcher: Temporal inconsistency detected! Frame %d is older than frame %d",
+                            i, i-1
+                        )
+            
+            # Stack into a single batch tensor
+            batch_tensor = torch.cat(batch_frames, dim=0)
+            
+            # Update last batch time
+            WebcamFrameBatcher._last_batch_time = current_time
+            
+            LOGGER.info(
+                "WebcamFrameBatcher: Outputting batch of %d frames (buffer remaining: %d, time_span: %.3fs)",
+                batch_size, len(WebcamFrameBatcher._frame_buffer),
+                timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
+            )
+            
+            return (batch_tensor,)
+        else:
+            # Not enough frames yet - output the current frame to keep workflow running
+            LOGGER.debug(
+                "WebcamFrameBatcher: Accumulating frames (%d/%d)",
+                len(WebcamFrameBatcher._frame_buffer), batch_size
+            )
+            return (image,)
 
 
 def _get_controller(config: NetworkControllerConfig) -> NetworkController:
@@ -231,17 +344,17 @@ class StartTrickleStream:
         # Reset instance state
         self._status_cache = ("", "", "", "Stream stopped")
         self._last_execution_time = 0.0
-        
+
         # Reset TrickleFrameInput timing so it doesn't think stream is stale
         TrickleFrameInput._last_frame_time = 0.0
-        
+
         if stream_was_running:
             LOGGER.info("StartTrickleStream: Stream stopped successfully")
             message = "Stream stopped. Enable to start a new stream."
         else:
             LOGGER.info("StartTrickleStream: No active stream to stop")
             message = "No active stream. Enable to start streaming."
-        
+
         # Return with UI notification
         return {
             "ui": {"text": [message]},
@@ -256,11 +369,11 @@ class StartTrickleStream:
         """
         now = time.perf_counter()
         elapsed = now - self._last_execution_time
-        
+
         if elapsed > self.STALE_CHECK_SECONDS and _NETWORK_RUNTIME.controller:
             ctrl = _NETWORK_RUNTIME.controller
             state = ctrl._stream_state
-            
+
             # Check if stream died
             if state in (
                 NetworkController.StreamState.ERROR,
@@ -318,7 +431,7 @@ class StartTrickleStream:
             keyframe_interval_s=float(keyframe_interval),
         )
         controller = _get_controller(controller_config)
-        
+
         # Validate stream state before reusing
         # Force restart if stream is dead/closed/idle, or if not healthy
         needs_restart = False
@@ -349,7 +462,7 @@ class StartTrickleStream:
             )
             status = controller.status()
             health = controller.get_health()
-            
+
             # Ensure subscriber is running if we have a subscribe_url
             subscribe_url = status.get("subscribe_url")
             if subscribe_url:
@@ -361,12 +474,12 @@ class StartTrickleStream:
                         task_error or "none",
                     )
                     subscriber.start(subscribe_url)
-            
+
             # Skip to output - don't restart
             needs_restart = False
         else:
             needs_restart = True
-        
+
         if needs_restart:
             try:
                 status = controller.start(
@@ -374,19 +487,19 @@ class StartTrickleStream:
                     params={},
                 )
                 health = controller.get_health()
-                
+
                 # Increment stream generation so IS_CHANGED reflects the new stream
                 StartTrickleStream._stream_generation += 1
-                
+
                 # Clear any previous startup error since we succeeded
                 _NETWORK_RUNTIME.last_startup_error = None
-                
+
                 LOGGER.info(
                     "StartTrickleStream: New stream started (generation=%d, publish_url=%s)",
                     StartTrickleStream._stream_generation,
                     status.get("publish_url", "")[:50] + "...",
                 )
-                
+
                 # Start subscriber if subscribe_url is present (only on restart)
                 if status.get("subscribe_url"):
                     subscriber = _get_subscriber(start_seq, controller.loop)
@@ -395,28 +508,32 @@ class StartTrickleStream:
                 # Handle connection/timeout errors gracefully
                 error_str = str(exc)
                 LOGGER.error("StartTrickleStream: Failed to start stream: %s", error_str)
-                
+
                 # Properly stop and clean up the controller before clearing
                 if controller:
                     try:
                         controller.stop()
                     except Exception as stop_exc:
                         LOGGER.warning("Failed to stop controller during error cleanup: %s", stop_exc)
-                
+
                 # Reset the frame bridge to clear old loop bindings
                 FRAME_BRIDGE.reset()
-                
+
                 # Clear the controller so next execution tries fresh
                 _NETWORK_RUNTIME.controller = None
                 _NETWORK_RUNTIME.subscriber = None
                 self._status_cache = None
-                
+
                 # Track the startup error so other nodes know why there's no stream
                 error_msg = f"Failed to start stream: {error_str}"
                 _NETWORK_RUNTIME.last_startup_error = error_msg
-                
+
                 self._status_cache = ("", "", "", error_msg)
-                return self._status_cache
+                # Return with UI notification so error is visible
+                return {
+                    "ui": {"text": [f"ERROR: {error_msg}"]},
+                    "result": self._status_cache,
+                }
 
         # Update tracking state
         self._last_execution_time = time.perf_counter()
@@ -428,6 +545,152 @@ class StartTrickleStream:
         self._status_cache = (manifest_id, publish_url, subscribe_url, error_msg)
 
         return self._status_cache
+
+
+class LoadVideoStream:
+    """
+    Start a trickle stream and immediately stream frames from a VIDEO input
+    (e.g., ComfyUI's Load Video node). Automatically resolves the underlying
+    file path, probes dimensions/FPS, and feeds frames into the publisher.
+    """
+
+    def __init__(self):
+        self._starter = StartTrickleStream()
+
+    @classmethod
+    def INPUT_TYPES(cls) -> Dict[str, Any]:
+        return {
+            "required": {
+                "config": ("TRICKLE_CONFIG",),
+                "video": ("VIDEO",),
+            },
+            "optional": {
+                "width": ("INT", {"default": 0, "min": 0, "max": 4096}),
+                "height": ("INT", {"default": 0, "min": 0, "max": 4096}),
+                "start_seq": ("INT", {"default": -2}),
+                "loop": ("BOOLEAN", {"default": True}),
+                "fps_override": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 240.0,
+                    "step": 0.1,
+                    "tooltip": "Override video FPS. 0 uses source FPS.",
+                }),
+                "enabled": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("manifest_id", "publish_url", "subscribe_url", "error")
+    FUNCTION = "start_stream_from_video"
+    CATEGORY = "Trickle"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs) -> str:
+        return StartTrickleStream.IS_CHANGED(**kwargs)
+
+    @staticmethod
+    def _probe_video(video_path: str) -> tuple[int, int, float]:
+        """
+        Read video metadata (width, height, fps). Returns zeros if unavailable.
+        """
+        try:
+            capture = cv2.VideoCapture(video_path)
+            if not capture.isOpened():
+                return 0, 0, 0.0
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            capture.release()
+            return width, height, fps
+        except Exception:
+            return 0, 0, 0.0
+
+    def _stop_stream(self):
+        """
+        Stop the video stream and file feed, mirroring StartTrickleStream behavior.
+        """
+        # Stop file feed first (before stopping the stream)
+        controller = _NETWORK_RUNTIME.controller
+        if controller:
+            controller.stop_file_feed()
+        
+        # Delegate to StartTrickleStream's stop logic for full cleanup
+        return self._starter._stop_stream()
+
+    def start_stream_from_video(
+        self,
+        config: Dict[str, Any],
+        video: Any,
+        width: int = 0,
+        height: int = 0,
+        start_seq: int = -2,
+        loop: bool = True,
+        fps_override: float = 0.0,
+        enabled: bool = True,
+    ):
+        if not enabled:
+            return self._stop_stream()
+
+        resolved_path = TrickleVideoInput._resolve_video_path(video)
+        if not resolved_path:
+            error_msg = "Video path is required"
+            LOGGER.error("LoadVideoStream: %s (input=%r)", error_msg, video)
+            return {
+                "ui": {"text": [f"ERROR: {error_msg}"]},
+                "result": ("", "", "", error_msg),
+            }
+        if not os.path.exists(resolved_path):
+            error_msg = f"Video not found: {resolved_path}"
+            LOGGER.error("LoadVideoStream: %s", error_msg)
+            return {
+                "ui": {"text": [f"ERROR: {error_msg}"]},
+                "result": ("", "", "", error_msg),
+            }
+
+        probed_width, probed_height, source_fps = self._probe_video(resolved_path)
+        effective_width = width or probed_width or 512
+        effective_height = height or probed_height or 512
+
+        status = self._starter.start_trickle_stream(
+            config,
+            effective_width,
+            effective_height,
+            start_seq,
+            True,
+        )
+        # If start_trickle_stream returned a dict with error UI, pass it through
+        if isinstance(status, dict) and "ui" in status:
+            return status
+
+        status_values = status.get("result", None) if isinstance(status, dict) else status
+        if not status_values:
+            status_values = ("", "", "", "")
+
+        manifest_id, publish_url, subscribe_url, error_msg = status_values
+
+        controller = _NETWORK_RUNTIME.controller
+        if controller and controller.running and not error_msg:
+            feed_fps = fps_override if fps_override > 0 else source_fps
+            try:
+                controller.start_file_feed(
+                    resolved_path,
+                    loop_video=bool(loop),
+                    fps_override=feed_fps if feed_fps > 0 else None,
+                )
+                LOGGER.info("LoadVideoStream: started file feed for %s", resolved_path)
+            except Exception as exc:
+                feed_error = f"file feed error: {exc}"
+                LOGGER.error("LoadVideoStream: %s", feed_error)
+                error_msg = f"{error_msg}; {feed_error}" if error_msg else feed_error
+                return {
+                    "ui": {"text": [f"ERROR: {error_msg}"]},
+                    "result": (manifest_id, publish_url, subscribe_url, error_msg),
+                }
+
+        # Success - return results (no UI notification needed)
+        return (manifest_id, publish_url, subscribe_url, error_msg)
 
 
 class TrickleFrameInput:
@@ -566,13 +829,14 @@ class TrickleFrameInput:
                         "Re-run workflow to try again."
                     )
             
-            enqueue_tensor_frame(image)
+            frames_enqueued = enqueue_tensor_batch(image)
             
             # Update last frame time for health check interval tracking
             TrickleFrameInput._last_frame_time = time.perf_counter()
             
             LOGGER.debug(
-                "Trickle frame enqueued (loop_ready=%s depth=%s state=%s)",
+                "Trickle frames enqueued=%d (loop_ready=%s depth=%s state=%s)",
+                frames_enqueued,
                 has_loop(),
                 queue_depth(),
                 state.value,
@@ -858,17 +1122,21 @@ class UpdateTrickleStream:
 
 # Register trickle nodes into the mapping dictionaries
 NODE_CLASS_MAPPINGS = {
+    "WebcamFrameBatcher": WebcamFrameBatcher,
     "TrickleConfig": TrickleConfig,
     "TrickleFrameInput": TrickleFrameInput,
     "TrickleFrameOutput": TrickleFrameOutput,
+    "LoadVideoStream": LoadVideoStream,
     "StartTrickleStream": StartTrickleStream,
     "UpdateTrickleStream": UpdateTrickleStream,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "WebcamFrameBatcher": "Webcam Frame Batcher",
     "TrickleConfig": "Trickle Config",
     "TrickleFrameInput": "Trickle Frame Input",
     "TrickleFrameOutput": "Trickle Frame Output",
+    "LoadVideoStream": "Load Video Stream",
     "StartTrickleStream": "Start Trickle Stream",
     "UpdateTrickleStream": "Update Trickle Stream",
 }

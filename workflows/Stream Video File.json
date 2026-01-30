@@ -1,0 +1,194 @@
+{
+  "id": "17ded4af-ba5f-4fbc-9dbc-9639add38f87",
+  "revision": 0,
+  "last_node_id": 21,
+  "last_link_id": 24,
+  "nodes": [
+    {
+      "id": 4,
+      "type": "TrickleConfig",
+      "pos": [
+        1041.8679041810474,
+        -847.3336953583428
+      ],
+      "size": [
+        324,
+        220
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "TRICKLE_CONFIG",
+          "links": [
+            23
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleConfig"
+      },
+      "widgets_values": [
+        "https://hky.eliteencoder.net:8936",
+        "http://localhost:8081",
+        "noop",
+        30,
+        2
+      ]
+    },
+    {
+      "id": 5,
+      "type": "TrickleFrameOutput",
+      "pos": [
+        1813.0941897487148,
+        -1209.7114410645875
+      ],
+      "size": [
+        495.296875,
+        561.296875
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleFrameOutput"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "LoadVideo",
+      "pos": [
+        1019.135356588717,
+        -1193.8024607038462
+      ],
+      "size": [
+        282.796875,
+        268.9375
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "2025-08-03 18-51-28.mp4",
+        "image"
+      ]
+    },
+    {
+      "id": 20,
+      "type": "LoadVideoStream",
+      "pos": [
+        1499.3069942769214,
+        -1066.407933483518
+      ],
+      "size": [
+        270,
+        304
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "TRICKLE_CONFIG",
+          "link": 23
+        },
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 24
+        }
+      ],
+      "outputs": [
+        {
+          "name": "manifest_id",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "publish_url",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "subscribe_url",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "error",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideoStream"
+      },
+      "widgets_values": [
+        0,
+        0,
+        -2,
+        true,
+        0,
+        true
+      ]
+    }
+  ],
+  "links": [
+    [
+      23,
+      4,
+      0,
+      20,
+      0,
+      "TRICKLE_CONFIG"
+    ],
+    [
+      24,
+      14,
+      0,
+      20,
+      1,
+      "VIDEO"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.9372853913132753,
+      "offset": [
+        -367.9934612928946,
+        1335.6698658102032
+      ]
+    },
+    "workflowRendererVersion": "Vue",
+    "frontendVersion": "1.36.14"
+  },
+  "version": 0.4
+}

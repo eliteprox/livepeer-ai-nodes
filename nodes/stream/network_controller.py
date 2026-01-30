@@ -11,6 +11,7 @@ from enum import Enum
 from fractions import Fraction
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+import cv2
 
 import av
 import numpy as np
@@ -87,6 +88,9 @@ class NetworkController:
         self._last_error: Optional[str] = None
         self._started_at: Optional[float] = None
         self._events_wait_seconds: float = 8.0
+        self._file_feed_thread: Optional[threading.Thread] = None
+        self._file_feed_stop: Optional[threading.Event] = None
+        self._file_feed_path: Optional[str] = None
 
     class StreamState(Enum):
         IDLE = "idle"
@@ -131,6 +135,7 @@ class NetworkController:
         return fut.result(timeout=30)
 
     def stop(self) -> Dict[str, Any]:
+        self.stop_file_feed()
         if not self.loop:
             return {"running": False}
         fut = asyncio.run_coroutine_threadsafe(self._stop_async(), self.loop)
@@ -425,6 +430,130 @@ class NetworkController:
             return False
         
         return True
+
+    def stop_file_feed(self) -> None:
+        """
+        Stop any background file feeder thread pushing frames into the bridge.
+        """
+        if self._file_feed_stop:
+            self._file_feed_stop.set()
+        if self._file_feed_thread and self._file_feed_thread.is_alive():
+            self._file_feed_thread.join(timeout=2.0)
+        self._file_feed_thread = None
+        self._file_feed_stop = None
+        self._file_feed_path = None
+
+    def start_file_feed(
+        self,
+        video_path: str,
+        *,
+        loop_video: bool = True,
+        fps_override: Optional[float] = None,
+    ) -> None:
+        """
+        Spawn a background thread that reads frames from a video file and
+        enqueues them into the FrameBridge for publishing.
+        """
+        if not video_path:
+            raise ValueError("video_path is required")
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video not found: {video_path}")
+        if not self.running or not self.is_healthy():
+            raise RuntimeError("Stream must be running before feeding video")
+
+        self.stop_file_feed()
+
+        stop_event = threading.Event()
+        self._file_feed_stop = stop_event
+        self._file_feed_path = video_path
+
+        self._file_feed_thread = threading.Thread(
+            target=self._file_feed_loop,
+            args=(video_path, stop_event, loop_video, fps_override),
+            name="file-feed-loop",
+            daemon=True,
+        )
+        self._file_feed_thread.start()
+
+    def _file_feed_loop(
+        self,
+        video_path: str,
+        stop_event: threading.Event,
+        loop_video: bool,
+        fps_override: Optional[float],
+    ) -> None:
+        """
+        Read frames from a video file in a background thread and push them into
+        the FrameBridge. Uses the configured output FPS for timing to stay in
+        sync with the publisher loop.
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            LOGGER.error("File feed failed to open video: %s", video_path)
+            return
+
+        # Use the stream's configured FPS for output timing (not source video FPS)
+        # This ensures file feed and publisher stay synchronized
+        output_fps = self.config.fps if self.config.fps > 0 else 30.0
+        frame_interval = 1.0 / output_fps
+
+        # Get source video info for logging
+        source_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or self.config.frame_width)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or self.config.frame_height)
+
+        LOGGER.info(
+            "Starting file feed video=%s source_fps=%.3f output_fps=%.3f total_frames=%d size=%dx%d loop=%s",
+            video_path,
+            source_fps,
+            output_fps,
+            total_frames,
+            width,
+            height,
+            loop_video,
+        )
+
+        frame_count = 0
+        next_frame_time = time.perf_counter()
+
+        while not stop_event.is_set() and self.running:
+            ret, frame = cap.read()
+            if not ret:
+                if loop_video:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    frame_count = 0
+                    LOGGER.info("File feed: looping video from start")
+                    continue
+                break
+
+            try:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if rgb.shape[1] != self.config.frame_width or rgb.shape[0] != self.config.frame_height:
+                    rgb = cv2.resize(
+                        rgb,
+                        (self.config.frame_width, self.config.frame_height),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                FRAME_BRIDGE.enqueue(rgb)
+                frame_count += 1
+            except Exception as exc:
+                LOGGER.error("File feed failed to enqueue frame: %s", exc)
+                break
+
+            # Pace frame reading to match output FPS
+            next_frame_time += frame_interval
+            sleep_time = next_frame_time - time.perf_counter()
+            if sleep_time > 0:
+                if stop_event.wait(sleep_time):
+                    break
+            else:
+                # We're behind - reset timing to prevent burst catching up
+                if sleep_time < -frame_interval:
+                    next_frame_time = time.perf_counter()
+
+        cap.release()
+        LOGGER.info("File feed thread exiting for video=%s (frames_read=%d)", video_path, frame_count)
 
     def _to_av_frame(self, frame: np.ndarray, pts: int, time_base: Fraction) -> av.VideoFrame:
         rgb = normalize_uint8_frame(frame)

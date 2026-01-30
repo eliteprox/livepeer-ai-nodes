@@ -185,6 +185,32 @@ def enqueue_tensor_frame(tensor: torch.Tensor) -> None:
     enqueue_array_frame(tensor_to_uint8_frame(tensor))
 
 
+def enqueue_tensor_batch(tensor: torch.Tensor) -> int:
+    """
+    Enqueue all frames from a batch tensor. Returns number of frames enqueued.
+    """
+
+    if tensor is None:
+        raise ValueError("tensor is None")
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError("tensor must be a torch.Tensor")
+
+    if tensor.dim() == 3:
+        enqueue_tensor_frame(tensor.unsqueeze(0))
+        return 1
+    if tensor.dim() != 4:
+        raise ValueError("tensor must be 3D or 4D")
+    batch_size = tensor.shape[0]
+    if batch_size <= 0:
+        raise ValueError("tensor batch is empty")
+
+    count = 0
+    for idx in range(batch_size):
+        enqueue_tensor_frame(tensor[idx:idx + 1])
+        count += 1
+    return count
+
+
 def normalize_uint8_frame(frame: np.ndarray) -> np.ndarray:
     """
     Ensure an ndarray is RGB uint8.
