@@ -20,13 +20,13 @@ import numpy as np
 os.environ.setdefault("ALLOW_HTTP_SIGNER", "1")
 
 
+from livepeer_gateway.live_payment import LivePaymentConfig
 from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig
 from livepeer_gateway.orchestrator import (
-    GetOrchestratorInfo,
     LiveVideoToVideo,
-    StartJob,
     StartJobRequest,
 )
+from livepeer_gateway.orchestrator_session import OrchestratorSession
 
 
 from .frame_bridge import FRAME_BRIDGE, array_to_av_frame, normalize_uint8_frame
@@ -63,6 +63,7 @@ class NetworkControllerConfig:
     frame_width: int = 512
     frame_height: int = 512
     keyframe_interval_s: float = 2.0
+    payment_interval_s: float = 5.0
 
 
 class NetworkController:
@@ -76,6 +77,7 @@ class NetworkController:
         self.config = config
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
+        self.session: Optional[OrchestratorSession] = None
         self.job: Optional[LiveVideoToVideo] = None
         self.media: Optional[MediaPublish] = None
         self._publisher_task: Optional[asyncio.Task] = None
@@ -180,21 +182,32 @@ class NetworkController:
         self._started_at = time.perf_counter()
 
         orch_url = _require_https_orchestrator(self.config.orchestrator_url)
-        LOGGER.info("Fetching orchestrator info for %s", self.config.orchestrator_url)
-        info = GetOrchestratorInfo(
+        
+        # Configure live payments to refresh ticket params while streaming
+        live_payment_config = None
+        if self.config.payment_interval_s > 0 and self.config.signer_url:
+            live_payment_config = LivePaymentConfig(
+                interval_s=self.config.payment_interval_s,
+                width=self.config.frame_width,
+                height=self.config.frame_height,
+                fps=self.config.fps,
+            )
+            LOGGER.info("Live payments enabled, interval=%.2fs", self.config.payment_interval_s)
+        
+        # Create session with live payment config for automatic ticket refresh
+        session = OrchestratorSession(
             orch_url,
             signer_url=self.config.signer_url,
-            model_id=model_id,
+            live_payment_config=live_payment_config,
         )
+        
         LOGGER.info("Starting job model_id=%s", model_id)
-        job = StartJob(
-            info,
+        job = session.start_job(
             StartJobRequest(
                 model_id=model_id,
                 params=params or None,
                 request_id=request_id,
             ),
-            signer_base_url=self.config.signer_url,
         )
         media = job.start_media(
             MediaPublishConfig(
@@ -203,6 +216,7 @@ class NetworkController:
             )
         )
 
+        self.session = session
         self.job = job
         self.media = media
         self.frames_sent = 0
@@ -231,9 +245,11 @@ class NetworkController:
         if self.media:
             with contextlib.suppress(Exception):
                 await self.media.close()
-        if self.job:
+        # Close session (stops payment senders and job resources)
+        if self.session:
             with contextlib.suppress(Exception):
-                await self.job.close()
+                await self.session.aclose()
+        self.session = None
         self.job = None
         self.media = None
         self._publisher_task = None
