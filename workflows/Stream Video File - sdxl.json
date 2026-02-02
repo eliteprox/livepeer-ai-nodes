@@ -1,0 +1,343 @@
+{
+  "id": "17ded4af-ba5f-4fbc-9dbc-9639add38f87",
+  "revision": 0,
+  "last_node_id": 37,
+  "last_link_id": 41,
+  "nodes": [
+    {
+      "id": 20,
+      "type": "LoadVideoStream",
+      "pos": [
+        1609.386583671895,
+        -1149.2576159875616
+      ],
+      "size": [
+        315.875,
+        304
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "TRICKLE_CONFIG",
+          "link": 36
+        },
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 27
+        }
+      ],
+      "outputs": [
+        {
+          "name": "manifest_id",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "publish_url",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "subscribe_url",
+          "type": "STRING",
+          "links": [
+            40
+          ]
+        },
+        {
+          "name": "error",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideoStream"
+      },
+      "widgets_values": [
+        0,
+        0,
+        -2,
+        false,
+        0,
+        true
+      ]
+    },
+    {
+      "id": 23,
+      "type": "TrickleFrameOutput",
+      "pos": [
+        2098.149720029088,
+        -1074.5544158028665
+      ],
+      "size": [
+        431.09375,
+        497.09375
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleFrameOutput"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 25,
+      "type": "LoadVideo",
+      "pos": [
+        1155.9582316910723,
+        -845.700989432721
+      ],
+      "size": [
+        282.796875,
+        268.9375
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            27
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "2024-04-07 19-16-45.mp4",
+        "image"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "TrickleConfig",
+      "pos": [
+        1231.0770945423144,
+        -1461.0481894778309
+      ],
+      "size": [
+        270,
+        220
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline_params",
+          "shape": 7,
+          "type": "DICT",
+          "link": 41
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "TRICKLE_CONFIG",
+          "links": [
+            36
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleConfig"
+      },
+      "widgets_values": [
+        "https://ai.eliteencoder.net:8936",
+        "https://signer.eliteencoder.net ",
+        "streamdiffusion-sdxl",
+        30,
+        2
+      ]
+    },
+    {
+      "id": 36,
+      "type": "TrickleStreamURL",
+      "pos": [
+        1952.8732050468784,
+        -1366.58562386309
+      ],
+      "size": [
+        290.34375,
+        221
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "subscribe_url",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "subscribe_url"
+          },
+          "link": 40
+        }
+      ],
+      "outputs": [
+        {
+          "name": "player_url",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleStreamURL"
+      },
+      "widgets_values": [
+        "",
+        8765,
+        true,
+        "http://127.0.0.1:8765/stream"
+      ]
+    },
+    {
+      "id": 37,
+      "type": "StreamDiffusionSDXLConfig",
+      "pos": [
+        634.8955806782237,
+        -1487.8440848615735
+      ],
+      "size": [
+        400,
+        872.625
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "controlnet_1",
+          "shape": 7,
+          "type": "CONTROLNET_CONFIG_SDXL",
+          "link": null
+        },
+        {
+          "name": "controlnet_2",
+          "shape": 7,
+          "type": "CONTROLNET_CONFIG_SDXL",
+          "link": null
+        },
+        {
+          "name": "controlnet_3",
+          "shape": 7,
+          "type": "CONTROLNET_CONFIG_SDXL",
+          "link": null
+        },
+        {
+          "name": "ip_adapter",
+          "shape": 7,
+          "type": "IP_ADAPTER_CONFIG_SDXL",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pipeline_params",
+          "type": "DICT",
+          "links": [
+            41
+          ]
+        },
+        {
+          "name": "model_id_out",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StreamDiffusionSDXLConfig"
+      },
+      "widgets_values": [
+        "blooming flower",
+        "stabilityai/sdxl-turbo",
+        512,
+        512,
+        3522772814,
+        "randomize",
+        "blurry, low quality, flat, 2d",
+        1,
+        0.7,
+        50,
+        "5,15,32",
+        "tensorrt",
+        true,
+        true,
+        true,
+        "slerp",
+        "linear",
+        true,
+        true,
+        false,
+        0.98,
+        10
+      ]
+    }
+  ],
+  "links": [
+    [
+      27,
+      25,
+      0,
+      20,
+      1,
+      "VIDEO"
+    ],
+    [
+      36,
+      33,
+      0,
+      20,
+      0,
+      "TRICKLE_CONFIG"
+    ],
+    [
+      40,
+      20,
+      2,
+      36,
+      0,
+      "STRING"
+    ],
+    [
+      41,
+      37,
+      0,
+      33,
+      0,
+      "DICT"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8954302432552405,
+      "offset": [
+        -371.33512828379924,
+        1657.2040025110916
+      ]
+    },
+    "workflowRendererVersion": "Vue",
+    "frontendVersion": "1.37.11"
+  },
+  "version": 0.4
+}

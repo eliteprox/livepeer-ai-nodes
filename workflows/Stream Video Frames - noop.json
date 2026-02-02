@@ -1,0 +1,246 @@
+{
+  "id": "17ded4af-ba5f-4fbc-9dbc-9639add38f87",
+  "revision": 0,
+  "last_node_id": 45,
+  "last_link_id": 47,
+  "nodes": [
+    {
+      "id": 39,
+      "type": "StartTrickleStream",
+      "pos": [
+        1665.6849771191257,
+        -1022.8719385593495
+      ],
+      "size": [
+        270,
+        244
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "TRICKLE_CONFIG",
+          "link": 43
+        }
+      ],
+      "outputs": [
+        {
+          "name": "manifest_id",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "publish_url",
+          "type": "STRING",
+          "links": [
+            46
+          ]
+        },
+        {
+          "name": "subscribe_url",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "error",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StartTrickleStream"
+      },
+      "widgets_values": [
+        512,
+        512,
+        -2,
+        true
+      ]
+    },
+    {
+      "id": 40,
+      "type": "TrickleConfig",
+      "pos": [
+        1201.103840695057,
+        -1041.8573617102477
+      ],
+      "size": [
+        270,
+        220
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline_params",
+          "shape": 7,
+          "type": "DICT",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "TRICKLE_CONFIG",
+          "links": [
+            43
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleConfig"
+      },
+      "widgets_values": [
+        "https://ai.eliteencoder.net:8936",
+        "https://signer.eliteencoder.net",
+        "noop",
+        30,
+        2
+      ]
+    },
+    {
+      "id": 41,
+      "type": "TrickleFrameInput",
+      "pos": [
+        1971.6831294753633,
+        -1311.0017219943836
+      ],
+      "size": [
+        270,
+        112
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 44
+        },
+        {
+          "name": "publish_url",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "publish_url"
+          },
+          "link": 46
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "TrickleFrameInput"
+      },
+      "widgets_values": [
+        "",
+        true
+      ]
+    },
+    {
+      "id": 42,
+      "type": "WebcamCapture",
+      "pos": [
+        1221.2059090980215,
+        -1465.117579750445
+      ],
+      "size": [
+        270,
+        332
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            44
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WebcamCapture"
+      },
+      "widgets_values": [
+        "",
+        640,
+        480,
+        true,
+        "capture"
+      ]
+    },
+    {
+      "id": 45,
+      "type": "TrickleFrameOutput",
+      "pos": [
+        2386.0089585661444,
+        -1171.4040247515745
+      ],
+      "size": [
+        225,
+        291
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleFrameOutput"
+      },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [
+      43,
+      40,
+      0,
+      39,
+      0,
+      "TRICKLE_CONFIG"
+    ],
+    [
+      44,
+      42,
+      0,
+      41,
+      0,
+      "IMAGE"
+    ],
+    [
+      46,
+      39,
+      1,
+      41,
+      1,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.8954302432552405,
+      "offset": [
+        -509.81604394866577,
+        1621.466992016932
+      ]
+    },
+    "workflowRendererVersion": "Vue",
+    "frontendVersion": "1.37.11"
+  },
+  "version": 0.4
+}

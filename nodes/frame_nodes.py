@@ -199,8 +199,8 @@ class TrickleConfig:
                     "tooltip": "Orchestrator URL (e.g., https://hky.eliteencoder.net:8936)",
                 }),
                 "signer_url": ("STRING", {
-                    "default": "",
-                    "tooltip": "Signer URL for authentication (e.g., http://localhost:8081)",
+                    "default": "https://signer.eliteencoder.net",
+                    "tooltip": "Signer URL for authentication",
                 }),
                 "model_id": ("STRING", {
                     "default": "noop",
@@ -221,6 +221,11 @@ class TrickleConfig:
                     "tooltip": "Keyframe interval in seconds",
                 }),
             },
+            "optional": {
+                "pipeline_params": ("DICT", {
+                    "tooltip": "Connect pipeline config (e.g., StreamDiffusion SDXL params_dict output)",
+                }),
+            },
         }
 
     RETURN_TYPES = ("TRICKLE_CONFIG",)
@@ -235,6 +240,7 @@ class TrickleConfig:
         model_id: str,
         fps: float,
         keyframe_interval: float,
+        pipeline_params: Dict[str, Any] = None,
     ) -> tuple:
         config = {
             "orchestrator_url": orchestrator_url,
@@ -242,7 +248,9 @@ class TrickleConfig:
             "model_id": model_id,
             "fps": fps,
             "keyframe_interval": keyframe_interval,
+            "pipeline_params": pipeline_params or {},
         }
+        
         return (config,)
 
 
@@ -425,6 +433,9 @@ class StartTrickleStream:
         model_id = config.get("model_id", "noop")
         fps = config.get("fps", 30.0)
         keyframe_interval = config.get("keyframe_interval", 2.0)
+        
+        # Pipeline params passed through from TrickleConfig
+        pipeline_params = config.get("pipeline_params", {})
 
         resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
         controller_config = NetworkControllerConfig(
@@ -435,6 +446,7 @@ class StartTrickleStream:
             frame_width=width,
             frame_height=height,
             keyframe_interval_s=float(keyframe_interval),
+
         )
         controller = _get_controller(controller_config)
 
@@ -495,7 +507,7 @@ class StartTrickleStream:
             try:
                 status = controller.start(
                     model_id=model_id,
-                    params={},
+                    params=pipeline_params,
                 )
                 health = controller.get_health()
 
@@ -563,6 +575,13 @@ class StartTrickleStream:
         subscribe_url = status.get("subscribe_url", "")
         error_msg = "" if controller.is_healthy() else health.get("last_error", "")
         self._status_cache = (manifest_id, publish_url, subscribe_url, error_msg)
+
+        # Return with success notification if stream started successfully
+        if needs_restart and not error_msg:
+            return {
+                "ui": {"text": [f"Stream connected: {manifest_id}"]},
+                "result": self._status_cache,
+            }
 
         return self._status_cache
 
@@ -717,8 +736,13 @@ class LoadVideoStream:
                     "result": (manifest_id, publish_url, subscribe_url, error_msg),
                 }
 
-        # Success - return results (no UI notification needed)
-        return (manifest_id, publish_url, subscribe_url, error_msg)
+        # Success - return with notification
+        video_name = os.path.basename(resolved_path)
+        success_msg = f"Stream started: {video_name}"
+        return {
+            "ui": {"text": [success_msg]},
+            "result": (manifest_id, publish_url, subscribe_url, error_msg),
+        }
 
 
 class TrickleFrameInput:

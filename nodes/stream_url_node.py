@@ -50,7 +50,7 @@ class TrickleStreamURL:
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("player_url",)
+    RETURN_NAMES = ("stream_url",)
     FUNCTION = "create_stream_url"
     CATEGORY = "Trickle"
     OUTPUT_NODE = True
@@ -106,12 +106,9 @@ class TrickleStreamURL:
             stream_url = proxy.stream_url
 
             LOGGER.info("Trickle stream URL ready: %s", stream_url)
-            
-            # Return URL with usage instructions
-            message = f"✓ Stream URL ready!\n\nOpen in VLC:\n1. Media -> Open Network Stream\n2. Paste: {stream_url}\n\nOr try: vlc {stream_url}"
 
             return {
-                "ui": {"text": [message]},
+                "ui": {"text": [stream_url]},
                 "result": (stream_url,),
             }
 

@@ -1,5 +1,7 @@
 .venv
 __pycache__
+*.egg-info/
+*.PKG-INFO
 .env
 .DS_Store
 .vscode
@@ -7,9 +9,7 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .mypy_cache
-.pytest_cache
-.ruff_cache
-.mypy_cache
+build/
 
 
 *.mp4
