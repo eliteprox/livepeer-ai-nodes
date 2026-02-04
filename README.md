@@ -17,15 +17,21 @@ Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Fra
 1. **Install via ComfyUI Manager** (easiest method):
    - Open ComfyUI Desktop
    - Go to **Manager** → **Install Custom Nodes**
-   - Search for "Trickle Streaming"
+   - Search for "Livepeer AI Streaming"
    - Click **Install**
    - Restart ComfyUI
 
-2. **Manual Installation**:
+2. **Install via comfy-cli** (ComfyUI Registry):
+   ```bash
+   comfy node registry-install livepeer-ai-nodes
+   ```
+   Then restart ComfyUI.
+
+3. **Manual Installation**:
    ```bash
    cd %USERPROFILE%\Documents\ComfyUI\custom_nodes
-   git clone https://github.com/your-org/comfyui-trickle.git comfyui-rtc
-   cd comfyui-rtc
+   git clone https://github.com/eliteprox/livepeer-ai-nodes.git livepeer-ai-nodes
+   cd livepeer-ai-nodes
    pip install -r requirements.txt
    ```
    Then restart ComfyUI Desktop.
@@ -36,8 +42,8 @@ For standard ComfyUI installations:
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/your-org/comfyui-trickle.git comfyui-rtc
-cd comfyui-rtc
+git clone https://github.com/eliteprox/livepeer-ai-nodes.git livepeer-ai-nodes
+cd livepeer-ai-nodes
 pip install -r requirements.txt
 ```
 
@@ -57,7 +63,7 @@ Set environment variables:
 export ORCHESTRATOR_URL=https://your-orchestrator.example.com:8936
 
 # Optional: remote signer for authentication
-export SIGNER_URL=http://your-signer.example.com:8081
+export SIGNER_URL=https://signer.eliteencoder.net
 ```
 
 Or configure via the `TrickleConfig` node in your workflow.
@@ -123,7 +129,7 @@ ComfyUI Node (sync)
 ```bash
 # Livepeer network
 ORCHESTRATOR_URL=https://orchestrator.example.com:8936
-SIGNER_URL=http://signer.example.com:8081  # optional
+SIGNER_URL=https://signer.eliteencoder.net  # optional
 ```
 
 
@@ -139,7 +145,7 @@ pytest tests/
 ### Project Structure
 
 ```
-comfyui-rtc/
+livepeer-ai-nodes/
 ├── nodes/
 │   ├── frame_nodes.py          # All 5 trickle streaming nodes
 │   ├── stream/                 # Streaming internals (5 modules)
@@ -183,5 +189,5 @@ comfyui-rtc/
 ## Credits
 
 Built with:
-- [Livepeer Gateway Python SDK](https://github.com/livepeer/livepeer-python-gateway)
+- [Livepeer Gateway Python SDK](https://github.com/j0sh/livepeer-python-gateway)
 - [ComfyUI](https://github.com/Comfy-Org/ComfyUI)

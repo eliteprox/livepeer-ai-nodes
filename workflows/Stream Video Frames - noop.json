@@ -1,15 +1,116 @@
 {
-  "id": "17ded4af-ba5f-4fbc-9dbc-9639add38f87",
+  "id": "6b3be126-c08e-4d07-bf33-f187533f3373",
   "revision": 0,
-  "last_node_id": 45,
-  "last_link_id": 47,
+  "last_node_id": 5,
+  "last_link_id": 3,
   "nodes": [
     {
-      "id": 39,
+      "id": 1,
+      "type": "TrickleFrameInput",
+      "pos": [
+        1972.6012446204827,
+        -1445.4351381612864
+      ],
+      "size": [
+        270,
+        112
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "name": "publish_url",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "publish_url"
+          },
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "TrickleFrameInput"
+      },
+      "widgets_values": [
+        "",
+        true
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WebcamCapture",
+      "pos": [
+        645.4631352711509,
+        -1261.6776922549377
+      ],
+      "size": [
+        270,
+        332
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WebcamCapture"
+      },
+      "widgets_values": [
+        "",
+        640,
+        480,
+        true,
+        "capture"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "TrickleFrameOutput",
+      "pos": [
+        2002.0936180013148,
+        -1128.963812087456
+      ],
+      "size": [
+        225,
+        291
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleFrameOutput"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 4,
       "type": "StartTrickleStream",
       "pos": [
-        1665.6849771191257,
-        -1022.8719385593495
+        1614.1606629536238,
+        -1275.2893651713414
       ],
       "size": [
         270,
@@ -22,7 +123,7 @@
         {
           "name": "config",
           "type": "TRICKLE_CONFIG",
-          "link": 43
+          "link": 1
         }
       ],
       "outputs": [
@@ -35,13 +136,13 @@
           "name": "publish_url",
           "type": "STRING",
           "links": [
-            46
+            3
           ]
         },
         {
           "name": "subscribe_url",
           "type": "STRING",
-          "links": []
+          "links": null
         },
         {
           "name": "error",
@@ -60,18 +161,18 @@
       ]
     },
     {
-      "id": 40,
+      "id": 5,
       "type": "TrickleConfig",
       "pos": [
-        1201.103840695057,
-        -1041.8573617102477
+        1108.2600144288667,
+        -1140.3068728511255
       ],
       "size": [
         270,
         220
       ],
       "flags": {},
-      "order": 0,
+      "order": 2,
       "mode": 0,
       "inputs": [
         {
@@ -86,7 +187,7 @@
           "name": "config",
           "type": "TRICKLE_CONFIG",
           "links": [
-            43
+            1
           ]
         }
       ],
@@ -100,131 +201,30 @@
         30,
         2
       ]
-    },
-    {
-      "id": 41,
-      "type": "TrickleFrameInput",
-      "pos": [
-        1971.6831294753633,
-        -1311.0017219943836
-      ],
-      "size": [
-        270,
-        112
-      ],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 44
-        },
-        {
-          "name": "publish_url",
-          "shape": 7,
-          "type": "STRING",
-          "widget": {
-            "name": "publish_url"
-          },
-          "link": 46
-        }
-      ],
-      "outputs": [],
-      "properties": {
-        "Node name for S&R": "TrickleFrameInput"
-      },
-      "widgets_values": [
-        "",
-        true
-      ]
-    },
-    {
-      "id": 42,
-      "type": "WebcamCapture",
-      "pos": [
-        1221.2059090980215,
-        -1465.117579750445
-      ],
-      "size": [
-        270,
-        332
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "links": [
-            44
-          ]
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "WebcamCapture"
-      },
-      "widgets_values": [
-        "",
-        640,
-        480,
-        true,
-        "capture"
-      ]
-    },
-    {
-      "id": 45,
-      "type": "TrickleFrameOutput",
-      "pos": [
-        2386.0089585661444,
-        -1171.4040247515745
-      ],
-      "size": [
-        225,
-        291
-      ],
-      "flags": {},
-      "order": 2,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "TrickleFrameOutput"
-      },
-      "widgets_values": []
     }
   ],
   "links": [
     [
-      43,
-      40,
+      1,
+      5,
       0,
-      39,
+      4,
       0,
       "TRICKLE_CONFIG"
     ],
     [
-      44,
-      42,
+      2,
+      2,
       0,
-      41,
+      1,
       0,
       "IMAGE"
     ],
     [
-      46,
-      39,
+      3,
+      4,
       1,
-      41,
+      1,
       1,
       "STRING"
     ]
@@ -233,13 +233,12 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.8954302432552405,
+      "scale": 0.8815962647426551,
       "offset": [
-        -509.81604394866577,
-        1621.466992016932
+        -147.50276774605993,
+        1721.071666756338
       ]
     },
-    "workflowRendererVersion": "Vue",
     "frontendVersion": "1.37.11"
   },
   "version": 0.4

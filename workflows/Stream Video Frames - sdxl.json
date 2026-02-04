@@ -1,47 +1,107 @@
 {
-  "id": "22057dc4-d59f-4fdf-a672-8d2bd4192b89",
+  "id": "17ded4af-ba5f-4fbc-9dbc-9639add38f87",
   "revision": 0,
-  "last_node_id": 6,
-  "last_link_id": 4,
+  "last_node_id": 30,
+  "last_link_id": 33,
   "nodes": [
     {
-      "id": 1,
-      "type": "StartTrickleStream",
+      "id": 22,
+      "type": "PreviewAny",
       "pos": [
-        1426.6935831135602,
-        -896.6755520889118
+        2669.6708218449985,
+        -1470.606708183595
       ],
       "size": [
-        270,
+        225,
+        153
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 27
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 23,
+      "type": "TrickleFrameOutput",
+      "pos": [
+        2459.6671782968733,
+        -1182.103877863222
+      ],
+      "size": [
+        431.09375,
+        497.09375
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TrickleFrameOutput"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 25,
+      "type": "StartTrickleStream",
+      "pos": [
+        1907.3819683917159,
+        -1141.858720428138
+      ],
+      "size": [
+        442.265625,
         244
       ],
       "flags": {},
-      "order": 4,
+      "order": 5,
       "mode": 0,
       "inputs": [
         {
           "name": "config",
           "type": "TRICKLE_CONFIG",
-          "link": 1
+          "link": 28
         }
       ],
       "outputs": [
         {
           "name": "manifest_id",
           "type": "STRING",
-          "links": null
+          "links": [
+            27
+          ]
         },
         {
           "name": "publish_url",
           "type": "STRING",
           "links": [
-            3
+            32
           ]
         },
         {
           "name": "subscribe_url",
           "type": "STRING",
-          "links": []
+          "links": null
         },
         {
           "name": "error",
@@ -60,25 +120,25 @@
       ]
     },
     {
-      "id": 2,
+      "id": 26,
       "type": "TrickleConfig",
       "pos": [
-        962.1125830153677,
-        -915.66097523981
+        1459.1948185711133,
+        -1145.3974729176045
       ],
       "size": [
-        270,
+        380.015625,
         220
       ],
       "flags": {},
-      "order": 3,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {
           "name": "pipeline_params",
           "shape": 7,
           "type": "DICT",
-          "link": 4
+          "link": 30
         }
       ],
       "outputs": [
@@ -86,7 +146,7 @@
           "name": "config",
           "type": "TRICKLE_CONFIG",
           "links": [
-            1
+            28
           ]
         }
       ],
@@ -102,24 +162,24 @@
       ]
     },
     {
-      "id": 3,
+      "id": 27,
       "type": "TrickleFrameInput",
       "pos": [
-        1732.691735469798,
-        -1184.8054036868841
+        2178.1078187413314,
+        -1580.072644691797
       ],
       "size": [
         270,
         112
       ],
       "flags": {},
-      "order": 5,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
           "name": "image",
           "type": "IMAGE",
-          "link": 2
+          "link": 29
         },
         {
           "name": "publish_url",
@@ -128,7 +188,7 @@
           "widget": {
             "name": "publish_url"
           },
-          "link": 3
+          "link": 32
         }
       ],
       "outputs": [],
@@ -141,18 +201,18 @@
       ]
     },
     {
-      "id": 4,
+      "id": 28,
       "type": "WebcamCapture",
       "pos": [
-        982.2146514183322,
-        -1338.9212614429455
+        1609.0364851010706,
+        -1580.5065943064617
       ],
       "size": [
         270,
         332
       ],
       "flags": {},
-      "order": 0,
+      "order": 1,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -160,7 +220,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            2
+            29
           ]
         }
       ],
@@ -176,45 +236,18 @@
       ]
     },
     {
-      "id": 5,
-      "type": "TrickleFrameOutput",
-      "pos": [
-        2147.0178372123314,
-        -1045.2076382811365
-      ],
-      "size": [
-        225,
-        291
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "TrickleFrameOutput"
-      },
-      "widgets_values": []
-    },
-    {
-      "id": 6,
+      "id": 29,
       "type": "StreamDiffusionSDXLConfig",
       "pos": [
-        498.64826225071033,
-        -1440.5482487098343
+        968.2598239158547,
+        -1378.9968152166593
       ],
       "size": [
         400,
-        872.625
+        1056.625
       ],
       "flags": {},
-      "order": 2,
+      "order": 3,
       "mode": 0,
       "inputs": [
         {
@@ -239,7 +272,7 @@
           "name": "ip_adapter",
           "shape": 7,
           "type": "IP_ADAPTER_CONFIG_SDXL",
-          "link": null
+          "link": 33
         }
       ],
       "outputs": [
@@ -247,13 +280,13 @@
           "name": "pipeline_params",
           "type": "DICT",
           "links": [
-            4
+            30
           ]
         },
         {
           "name": "model_id_out",
           "type": "STRING",
-          "links": null
+          "links": []
         }
       ],
       "properties": {
@@ -264,7 +297,7 @@
         "stabilityai/sdxl-turbo",
         512,
         512,
-        2236723037,
+        2909901071,
         "randomize",
         "blurry, low quality, flat, 2d",
         1,
@@ -281,54 +314,116 @@
         true,
         false,
         0.98,
-        10
+        10,
+        true,
+        "latent-consistency/lcm-lora-sdv1-5",
+        false,
+        2,
+        2,
+        false
+      ]
+    },
+    {
+      "id": 30,
+      "type": "StreamDiffusionSDXLIPAdapter",
+      "pos": [
+        563.5868886267062,
+        -1440.9703311016615
+      ],
+      "size": [
+        319.078125,
+        202.65625
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "ip_adapter_config",
+          "type": "IP_ADAPTER_CONFIG_SDXL",
+          "links": [
+            33
+          ]
+        },
+        {
+          "name": "config_json",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "StreamDiffusionSDXLIPAdapter"
+      },
+      "widgets_values": [
+        true,
+        0.5,
+        "regular",
+        "https://storage.googleapis.com/thom-vod-testing/style-presets/default_preset.png"
       ]
     }
   ],
   "links": [
     [
-      1,
-      2,
+      27,
+      25,
       0,
-      1,
+      22,
+      0,
+      "STRING"
+    ],
+    [
+      28,
+      26,
+      0,
+      25,
       0,
       "TRICKLE_CONFIG"
     ],
     [
-      2,
-      4,
+      29,
+      28,
       0,
-      3,
+      27,
       0,
       "IMAGE"
     ],
     [
-      3,
+      30,
+      29,
+      0,
+      26,
+      0,
+      "DICT"
+    ],
+    [
+      32,
+      25,
       1,
-      1,
-      3,
+      27,
       1,
       "STRING"
     ],
     [
-      4,
-      6,
+      33,
+      30,
       0,
-      2,
-      0,
-      "DICT"
+      29,
+      3,
+      "IP_ADAPTER_CONFIG_SDXL"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.8954302432552405,
+      "scale": 0.8815962647426551,
       "offset": [
-        -131.22708902616756,
-        1565.6279131198085
+        -386.84134985948646,
+        1701.7884634581
       ]
     },
+    "workflowRendererVersion": "Vue",
     "frontendVersion": "1.37.11"
   },
   "version": 0.4

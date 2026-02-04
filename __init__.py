@@ -8,7 +8,7 @@ import sys
 import logging
 from pathlib import Path
 
-LOGGER = logging.getLogger("comfyui-rtc")
+LOGGER = logging.getLogger("livepeer-ai-nodes")
 
 ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
@@ -19,7 +19,7 @@ WEB_DIRECTORY = "./nodes/js"
 # Import nodes - let errors propagate so they're visible in ComfyUI logs
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
-LOGGER.info("comfyui-rtc loaded %d nodes: %s", len(NODE_CLASS_MAPPINGS), list(NODE_CLASS_MAPPINGS.keys()))
+LOGGER.info("livepeer-ai-nodes loaded %d nodes: %s", len(NODE_CLASS_MAPPINGS), list(NODE_CLASS_MAPPINGS.keys()))
 
 __all__ = [
     "NODE_CLASS_MAPPINGS",

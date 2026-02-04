@@ -42,26 +42,27 @@ Core dependencies (see `requirements.txt`):
 
 Test with example workflows:
 
-```bash
-# 1. Start ComfyUI
-cd /path/to/ComfyUI
-python main.py
+1. **Start ComfyUI:**
+   ```bash
+   cd /path/to/ComfyUI
+   python main.py
+   ```
 
-# 2. Load workflow
-# Open: custom_nodes/comfyui-rtc/workflows/Trickle streaming workflow.json
+2. **Load workflow:**
+   Open `custom_nodes/livepeer-ai-nodes/workflows/Trickle streaming workflow.json`
 
-# 3. Configure TrickleConfig node:
-# - orchestrator_url: https://your-orchestrator:8936
-# - signer_url: http://your-signer:8081 (optional)
-# - model_id: noop (or comfystream)
+3. **Configure TrickleConfig node:**
+   - `orchestrator_url`: `https://your-orchestrator:8936`
+   - `signer_url`: `https://signer.eliteencoder.net` (optional)
+   - `model_id`: `noop` (or `comfystream`)
 
-# 4. Queue the workflow
-# 5. Monitor console for:
-#    - [SUBSCRIBER] messages
-#    - publish_url and subscribe_url
-#    - Frame queue depth
-#    - Stream state transitions
-```
+4. **Queue the workflow**
+
+5. **Monitor console for:**
+   - `[SUBSCRIBER]` messages
+   - `publish_url` and `subscribe_url`
+   - Frame queue depth
+   - Stream state transitions
 
 ### Testing Components Individually
 
