@@ -10,7 +10,7 @@ python-dotenv>=1.0.1
 aiohttp>=3.9.0
 protobuf
 comfyui-frontend-package>=1.32.5
-livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@e80e539ee4336afe36543e1fa5380dd0d6c7c0f9
+livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@7c466df0a17418997d0331593fb41b11cfeca3e6
 torch
 torchvision
 torchaudio
