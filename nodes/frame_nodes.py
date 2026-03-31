@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import cv2
 
-from .stream.credentials import resolve_network_config
+from .stream.credentials import resolve_orchestrator
 from .stream.frame_bridge import enqueue_tensor_frame, enqueue_tensor_batch, queue_depth, has_loop, FRAME_BRIDGE
 from .stream.network_controller import NetworkController, NetworkControllerConfig
 from .stream.network_subscriber import NetworkSubscriber, NetworkSubscriberConfig
@@ -188,20 +188,16 @@ class TrickleConfig:
     """
     Configuration node for trickle streaming parameters.
     Outputs a config dict that can be connected to Start Trickle Stream.
+
+    Authentication (billing_url / client_id) is handled automatically
+    via package-level constants. Orchestrator discovery is used by
+    default; set orchestrator_url only to pin a specific orchestrator.
     """
 
     @classmethod
     def INPUT_TYPES(cls) -> Dict[str, Any]:
         return {
             "required": {
-                "orchestrator_url": ("STRING", {
-                    "default": "https://localhost:8935",
-                    "tooltip": "Orchestrator URL (e.g., https://hky.eliteencoder.net:8936)",
-                }),
-                "signer_url": ("STRING", {
-                    "default": "https://signer.eliteencoder.net",
-                    "tooltip": "Signer URL for authentication",
-                }),
                 "model_id": ("STRING", {
                     "default": "noop",
                     "tooltip": "Model ID to use (e.g., noop, comfystream)",
@@ -222,6 +218,10 @@ class TrickleConfig:
                 }),
             },
             "optional": {
+                "orchestrator_url": ("STRING", {
+                    "default": "",
+                    "tooltip": "Pin a specific orchestrator (e.g., https://hky.eliteencoder.net:8936). Leave empty for automatic discovery.",
+                }),
                 "pipeline_params": ("DICT", {
                     "tooltip": "Connect pipeline config (e.g., StreamDiffusion SDXL params_dict output)",
                 }),
@@ -235,22 +235,20 @@ class TrickleConfig:
 
     def create_config(
         self,
-        orchestrator_url: str,
-        signer_url: str,
         model_id: str,
         fps: float,
         keyframe_interval: float,
+        orchestrator_url: str = "",
         pipeline_params: Dict[str, Any] = None,
     ) -> tuple:
         config = {
-            "orchestrator_url": orchestrator_url,
-            "signer_url": signer_url,
             "model_id": model_id,
             "fps": fps,
             "keyframe_interval": keyframe_interval,
+            "orchestrator_url": orchestrator_url,
             "pipeline_params": pipeline_params or {},
         }
-        
+
         return (config,)
 
 
@@ -427,26 +425,19 @@ class StartTrickleStream:
         # Proactively check for stale/dead streams before proceeding
         self._check_and_clear_stale_stream()
 
-        # Extract values from config
-        orchestrator_url = config.get("orchestrator_url", "https://localhost:8935")
-        signer_url = config.get("signer_url", "")
         model_id = config.get("model_id", "noop")
         fps = config.get("fps", 30.0)
         keyframe_interval = config.get("keyframe_interval", 2.0)
-        
-        # Pipeline params passed through from TrickleConfig
+        orchestrator_url = config.get("orchestrator_url", "")
         pipeline_params = config.get("pipeline_params", {})
 
-        resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
         controller_config = NetworkControllerConfig(
-            orchestrator_url=resolved_orch,
-            signer_url=resolved_signer or None,
             model_id=model_id,
             fps=float(fps),
             frame_width=width,
             frame_height=height,
             keyframe_interval_s=float(keyframe_interval),
-
+            orchestrator_url=resolve_orchestrator(orchestrator_url),
         )
         controller = _get_controller(controller_config)
 
@@ -540,6 +531,17 @@ class StartTrickleStream:
                 # Handle connection/timeout errors gracefully
                 error_str = str(exc)
                 LOGGER.error("StartTrickleStream: Failed to start stream: %s", error_str)
+
+                # Check if OIDC device auth was pending when the error occurred
+                device_auth = NetworkController._device_auth_info
+                if device_auth:
+                    auth_url = device_auth.get("auth_url", "")
+                    user_code = device_auth.get("user_code", "")
+                    error_str = (
+                        f"OIDC login required. Visit: {auth_url} "
+                        f"and enter code: {user_code} — then re-run the workflow."
+                    )
+                    NetworkController._device_auth_info = None
 
                 # Properly stop and clean up the controller before clearing
                 if controller:
@@ -1136,7 +1138,7 @@ class UpdateTrickleStream:
             return ()
         try:
             future = asyncio.run_coroutine_threadsafe(
-                controller.job.control.write_control(control_payload),
+                controller.job.control.write(control_payload),
                 controller.loop,
             )
             future.result(timeout=5)
