@@ -5,13 +5,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import folder_paths
 import numpy as np
 import torch
 import cv2
 
-from .stream.credentials import resolve_orchestrator
+from .stream.credentials import BILLING_URL, cached_auth_status, resolve_orchestrator
 from .stream.frame_bridge import enqueue_tensor_frame, enqueue_tensor_batch, queue_depth, has_loop, FRAME_BRIDGE
 from .stream.network_controller import NetworkController, NetworkControllerConfig
 from .stream.network_subscriber import NetworkSubscriber, NetworkSubscriberConfig
@@ -33,6 +34,47 @@ class _NetworkRuntime:
 
 
 _NETWORK_RUNTIME = _NetworkRuntime()
+
+
+def _format_device_auth_dialog(
+    device_auth: Dict[str, Any],
+    startup_error: str,
+) -> str:
+    auth_url = str(device_auth.get("auth_url", "")).strip()
+    user_code = str(device_auth.get("user_code", "")).strip()
+    try:
+        expires_in = int(device_auth.get("expires_in", 0) or 0)
+    except (TypeError, ValueError):
+        expires_in = 0
+    expires_minutes = max(1, round(expires_in / 60)) if expires_in else None
+
+    verify_url = auth_url
+    if auth_url:
+        parsed = urlparse(auth_url)
+        if parsed.scheme and parsed.netloc:
+            verify_url = f"{parsed.scheme}://{parsed.netloc}/oidc/device"
+
+    details = [
+        "Livepeer login required (device code flow).",
+        f"1) Open: {auth_url or verify_url}",
+        f"2) Enter code: {user_code or '(missing code)'}",
+        "3) Approve access in your browser.",
+        "4) Re-run this workflow after completing login.",
+    ]
+    if verify_url and verify_url != auth_url:
+        details.append(f"Fallback URL: {verify_url}")
+    if expires_minutes:
+        details.append(f"Code expires in about {expires_minutes} minute(s).")
+
+    error_lower = startup_error.lower()
+    if "expired_token" in error_lower or "expired" in error_lower:
+        details.append("The code expired. Run StartTrickleStream again to get a new code.")
+    elif "access_denied" in error_lower:
+        details.append("Authorization was denied. Retry and approve access in the browser.")
+    elif "authorization_pending" in error_lower:
+        details.append("Authorization is still pending. Complete login and run again.")
+
+    return "\n".join(details)
 
 
 # --- Capture nodes ---
@@ -66,7 +108,7 @@ class WebcamFrameBatcher:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("images",)
     FUNCTION = "batch_frames"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = False
 
     @classmethod
@@ -231,7 +273,7 @@ class TrickleConfig:
     RETURN_TYPES = ("TRICKLE_CONFIG",)
     RETURN_NAMES = ("config",)
     FUNCTION = "create_config"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
 
     def create_config(
         self,
@@ -293,7 +335,7 @@ class StartTrickleStream:
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("manifest_id", "publish_url", "subscribe_url", "error")
     FUNCTION = "start_trickle_stream"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = True
 
     @classmethod
@@ -494,6 +536,21 @@ class StartTrickleStream:
             # during startup. The subscriber handles resetting when the URL changes (i.e.,
             # when connecting to a genuinely different stream). For same-stream reconnects,
             # keeping the last frame is better UX than showing black.
+            has_cached_auth, auth_reason = cached_auth_status()
+            if not has_cached_auth:
+                error_msg = (
+                    "Livepeer login required before starting stream.\n"
+                    f"{auth_reason}\n"
+                    "Click Livepeer Login in Settings (Livepeer -> Authentication -> Login), "
+                    "then re-run StartTrickleStream.\n"
+                    f"Billing URL: {BILLING_URL}"
+                )
+                _NETWORK_RUNTIME.last_startup_error = error_msg
+                self._status_cache = ("", "", "", error_msg)
+                return {
+                    "ui": {"text": [f"ERROR: {error_msg}"]},
+                    "result": self._status_cache,
+                }
             
             try:
                 status = controller.start(
@@ -535,11 +592,9 @@ class StartTrickleStream:
                 # Check if OIDC device auth was pending when the error occurred
                 device_auth = NetworkController._device_auth_info
                 if device_auth:
-                    auth_url = device_auth.get("auth_url", "")
-                    user_code = device_auth.get("user_code", "")
-                    error_str = (
-                        f"OIDC login required. Visit: {auth_url} "
-                        f"and enter code: {user_code} — then re-run the workflow."
+                    error_str = _format_device_auth_dialog(
+                        device_auth=device_auth,
+                        startup_error=error_str,
                     )
                     NetworkController._device_auth_info = None
 
@@ -624,7 +679,7 @@ class LoadVideoStream:
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("manifest_id", "publish_url", "subscribe_url", "error")
     FUNCTION = "start_stream_from_video"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = True
 
     @classmethod
@@ -775,7 +830,7 @@ class TrickleFrameInput:
     RETURN_TYPES = ()
     RETURN_NAMES = ()
     FUNCTION = "push_frame"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = True
 
     @classmethod
@@ -888,7 +943,7 @@ class TrickleVideoInput:
     RETURN_TYPES = ()
     RETURN_NAMES = ()
     FUNCTION = "feed_video"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = True
 
     @classmethod
@@ -1006,6 +1061,8 @@ class TrickleFrameOutput:
     
     # Class-level counter per node unique_id to ensure preview filenames change each execution
     _execution_counters: Dict[str, int] = {}
+    INITIAL_FRAME_WAIT_SECONDS = 2.5
+    INITIAL_FRAME_POLL_SECONDS = 0.05
 
     def __init__(self):
         self._blank = self._blank_tensor()
@@ -1025,7 +1082,7 @@ class TrickleFrameOutput:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "pull_frame"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = True  # Always executes and shows preview
 
     @classmethod
@@ -1052,6 +1109,17 @@ class TrickleFrameOutput:
         
         try:
             frame_np, timestamp, has_frame = TRICKLE_OUTPUT_BRIDGE.get_frame_or_blank_sync()
+            if not has_frame and subscriber.running and subscriber.task_alive:
+                # First-frame warmup: wait briefly so users do not need to run twice
+                # after starting or restarting a stream.
+                deadline = time.perf_counter() + self.INITIAL_FRAME_WAIT_SECONDS
+                while time.perf_counter() < deadline:
+                    frame_np, timestamp, has_frame = TRICKLE_OUTPUT_BRIDGE.get_frame_or_blank_sync()
+                    if has_frame:
+                        break
+                    if not subscriber.running or not subscriber.task_alive:
+                        break
+                    time.sleep(self.INITIAL_FRAME_POLL_SECONDS)
             tensor = torch.from_numpy(frame_np.astype(np.float32) / 255.0).unsqueeze(0)
             return self._return_with_preview(tensor, unique_id)
         except Exception as exc:
@@ -1122,7 +1190,7 @@ class UpdateTrickleStream:
     RETURN_TYPES = ()
     RETURN_NAMES = ()
     FUNCTION = "update_trickle_stream"
-    CATEGORY = "Trickle"
+    CATEGORY = "Livepeer/Trickle"
     OUTPUT_NODE = True
 
     @classmethod

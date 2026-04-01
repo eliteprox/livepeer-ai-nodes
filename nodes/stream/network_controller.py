@@ -26,12 +26,28 @@ from livepeer_gateway.lv2v import (
     StartJobRequest,
     start_lv2v,
 )
+from server import PromptServer
 
-
-from .credentials import BILLING_URL, CLIENT_ID, get_auth_headless
+from .credentials import BILLING_URL, CLIENT_ID, get_auth_headless, try_refresh_auth_token
 from .frame_bridge import FRAME_BRIDGE, array_to_av_frame, normalize_uint8_frame
 
 LOGGER = logging.getLogger("comfyui_trickle.network_controller")
+
+
+def _is_signer_auth_denial(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    has_signer_payment_context = (
+        "generate-live-payment" in text or
+        "api/signer" in text
+    )
+    has_auth_status = (
+        "http 401" in text or
+        "http 403" in text or
+        "http 482" in text or
+        "unauthorized" in text or
+        "forbidden" in text
+    )
+    return has_signer_payment_context and has_auth_status
 
 
 def _ensure_allow_http_signer() -> None:
@@ -171,6 +187,18 @@ class NetworkController:
             "user_code": user_code,
             "expires_in": expires_in,
         }
+        try:
+            PromptServer.instance.send_sync(
+                "livepeer_device_auth_required",
+                {
+                    "auth_url": auth_url,
+                    "user_code": user_code,
+                    "expires_in": expires_in,
+                    "workflow_interrupted": False,
+                },
+            )
+        except Exception:
+            LOGGER.debug("Failed to send device-auth UI event", exc_info=True)
         LOGGER.info(
             "OIDC Device Authorization: visit %s and enter code: %s (expires in %ds)",
             auth_url,
@@ -197,19 +225,52 @@ class NetworkController:
         orch_url = _normalize_orchestrator(self.config.orchestrator_url)
 
         LOGGER.info("Starting job model_id=%s orch=%s", model_id, orch_url or "(discovery)")
-        job = await asyncio.to_thread(
-            start_lv2v,
-            orch_url,
-            StartJobRequest(
-                model_id=model_id,
-                params=params or None,
-                request_id=request_id,
-            ),
-            billing_url=BILLING_URL,
-            client_id=CLIENT_ID,
-            headless=get_auth_headless(),
-            on_device_auth=self._on_device_auth,
-        )
+        try:
+            job = await asyncio.to_thread(
+                start_lv2v,
+                orch_url,
+                StartJobRequest(
+                    model_id=model_id,
+                    params=params or None,
+                    request_id=request_id,
+                ),
+                billing_url=BILLING_URL,
+                client_id=CLIENT_ID,
+                headless=get_auth_headless(),
+                on_device_auth=self._on_device_auth,
+            )
+        except Exception as exc:
+            exc_text = str(exc)
+            if _is_signer_auth_denial(exc_text):
+                refreshed, refresh_error = await asyncio.to_thread(try_refresh_auth_token)
+                if refreshed:
+                    LOGGER.info("Refreshed OIDC token after signer denial; retrying start once")
+                    job = await asyncio.to_thread(
+                        start_lv2v,
+                        orch_url,
+                        StartJobRequest(
+                            model_id=model_id,
+                            params=params or None,
+                            request_id=request_id,
+                        ),
+                        billing_url=BILLING_URL,
+                        client_id=CLIENT_ID,
+                        headless=get_auth_headless(),
+                        on_device_auth=self._on_device_auth,
+                    )
+                else:
+                    raise RuntimeError(
+                        "Livepeer session refresh failed. "
+                        f"{refresh_error} "
+                        "Click Livepeer Login in Settings and try again."
+                    ) from exc
+            else:
+                raise
+        try:
+            # Ensure per-segment payment sender is running from async context.
+            job.start_payment_sender()
+        except Exception as exc:
+            LOGGER.debug("Payment sender not started from controller loop: %s", exc)
         media = job.start_media(
             MediaPublishConfig(
                 fps=self.config.fps,

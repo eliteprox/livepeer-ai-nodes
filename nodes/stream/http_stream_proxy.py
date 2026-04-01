@@ -29,6 +29,7 @@ class HttpStreamProxy:
         self._runner: Optional[web.AppRunner] = None
         self._site: Optional[web.TCPSite] = None
         self._current_subscribe_url: Optional[str] = None
+        self._session_id: int = 0
 
     async def start(self) -> str:
         """Start the HTTP server and return the base URL."""
@@ -69,7 +70,11 @@ class HttpStreamProxy:
 
     def set_subscribe_url(self, subscribe_url: str) -> None:
         """Update the trickle subscribe URL to proxy."""
+        if subscribe_url == self._current_subscribe_url:
+            # No change; keep session id to avoid dropping clients needlessly.
+            return
         self._current_subscribe_url = subscribe_url
+        self._session_id += 1
         print(f"[HTTP_PROXY] Updated subscribe URL")
         print(f"[HTTP_PROXY] Ready to stream at: http://{self.host}:{self.port}/stream")
         LOGGER.info("HttpStreamProxy now proxying: %s", subscribe_url)
@@ -88,7 +93,9 @@ class HttpStreamProxy:
         Stream endpoint that proxies the trickle subscribe URL.
         Uses MediaOutput to properly decode trickle segments and forward as MPEG-TS.
         """
-        if not self._current_subscribe_url:
+        subscribe_url = self._current_subscribe_url
+        session_id = self._session_id
+        if not subscribe_url:
             print("[HTTP_PROXY] ERROR: No stream configured")
             return web.Response(status=404, text="No stream configured")
 
@@ -111,8 +118,10 @@ class HttpStreamProxy:
             # Use MediaOutput to properly decode trickle segments
             print(f"[HTTP_PROXY] Starting MPEG-TS stream...")
             media_output = MediaOutput(
-                self._current_subscribe_url,
-                start_seq=-2,
+                subscribe_url,
+                # Use 0 to start from the latest available without deep backfill
+                # to reduce stalls on reconnect.
+                start_seq=0,
                 max_retries=5,
                 chunk_size=64 * 1024,
             )
@@ -120,12 +129,27 @@ class HttpStreamProxy:
             # Stream MPEG-TS bytes from trickle to client
             bytes_sent = 0
             chunk_count = 0
+            last_chunk_time = asyncio.get_event_loop().time()
+            idle_timeout = 8.0  # seconds without chunks before ending
+
             async for chunk in media_output.bytes():
-                if not chunk:
+                # Abort this client if the subscribe URL changed.
+                if session_id != self._session_id:
+                    print("[HTTP_PROXY] Session changed; closing old client")
                     break
+
+                if not chunk:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_chunk_time > idle_timeout:
+                        print("[HTTP_PROXY] Idle timeout; closing stream client")
+                        break
+                    await asyncio.sleep(0.05)
+                    continue
+
                 await response.write(chunk)
                 bytes_sent += len(chunk)
                 chunk_count += 1
+                last_chunk_time = asyncio.get_event_loop().time()
                 
                 # Log every 100 chunks (~6.4MB)
                 if chunk_count % 100 == 0:
