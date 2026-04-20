@@ -20,32 +20,47 @@ import numpy as np
 os.environ.setdefault("ALLOW_HTTP_SIGNER", "1")
 
 
-from livepeer_gateway.live_payment import LivePaymentConfig
 from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig
-from livepeer_gateway.orchestrator import (
+from livepeer_gateway.lv2v import (
     LiveVideoToVideo,
     StartJobRequest,
+    start_lv2v,
 )
-from livepeer_gateway.orchestrator_session import OrchestratorSession
+from server import PromptServer
 
-
+from .credentials import BILLING_URL, CLIENT_ID, get_auth_headless, try_refresh_auth_token
 from .frame_bridge import FRAME_BRIDGE, array_to_av_frame, normalize_uint8_frame
 
 LOGGER = logging.getLogger("comfyui_trickle.network_controller")
 
 
+def _is_signer_auth_denial(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    has_signer_payment_context = (
+        "generate-live-payment" in text or
+        "api/signer" in text
+    )
+    has_auth_status = (
+        "http 401" in text or
+        "http 403" in text or
+        "http 482" in text or
+        "unauthorized" in text or
+        "forbidden" in text
+    )
+    return has_signer_payment_context and has_auth_status
+
+
 def _ensure_allow_http_signer() -> None:
-    """
-    Ensure ALLOW_HTTP_SIGNER is set before initializing orchestrator client.
-    """
     if os.environ.get("ALLOW_HTTP_SIGNER") != "1":
         os.environ["ALLOW_HTTP_SIGNER"] = "1"
         LOGGER.debug("ALLOW_HTTP_SIGNER set to 1 for orchestrator client initialization")
 
 
-# Enforce orchestrator URLs stay https (transcoder endpoints are always https)
-def _require_https_orchestrator(url: str) -> str:
-    url = (url or "").strip()
+def _normalize_orchestrator(url: Optional[str]) -> Optional[str]:
+    """Validate and normalize an orchestrator URL, or return None for discovery mode."""
+    if not url:
+        return None
+    url = url.strip()
     parsed = urlparse(url if "://" in url else f"https://{url}")
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError(f"Orchestrator URL must be https://host:port (got {url!r})")
@@ -56,14 +71,12 @@ def _require_https_orchestrator(url: str) -> str:
 
 @dataclass
 class NetworkControllerConfig:
-    orchestrator_url: str
-    signer_url: Optional[str] = None
-    model_id: str = "comfystream"
+    model_id: str = "noop"
     fps: float = 30.0
     frame_width: int = 512
     frame_height: int = 512
     keyframe_interval_s: float = 2.0
-    payment_interval_s: float = 5.0
+    orchestrator_url: Optional[str] = None
 
 
 class NetworkController:
@@ -73,11 +86,12 @@ class NetworkController:
     enqueue frames synchronously.
     """
 
+    _device_auth_info: Optional[Dict[str, Any]] = None
+
     def __init__(self, config: NetworkControllerConfig):
         self.config = config
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
-        self.session: Optional[OrchestratorSession] = None
         self.job: Optional[LiveVideoToVideo] = None
         self.media: Optional[MediaPublish] = None
         self._publisher_task: Optional[asyncio.Task] = None
@@ -126,6 +140,7 @@ class NetworkController:
         if not self.loop:
             raise RuntimeError("Failed to initialize asyncio loop")
 
+        timeout = 600
         fut = asyncio.run_coroutine_threadsafe(
             self._start_async(
                 model_id=model_id or self.config.model_id,
@@ -134,7 +149,7 @@ class NetworkController:
             ),
             self.loop,
         )
-        return fut.result(timeout=30)
+        return fut.result(timeout=timeout)
 
     def stop(self) -> Dict[str, Any]:
         self.stop_file_feed()
@@ -166,6 +181,31 @@ class NetworkController:
             "started_at": self._started_at or 0.0,
         }
 
+    def _on_device_auth(self, auth_url: str, user_code: str, expires_in: int) -> None:
+        NetworkController._device_auth_info = {
+            "auth_url": auth_url,
+            "user_code": user_code,
+            "expires_in": expires_in,
+        }
+        try:
+            PromptServer.instance.send_sync(
+                "livepeer_device_auth_required",
+                {
+                    "auth_url": auth_url,
+                    "user_code": user_code,
+                    "expires_in": expires_in,
+                    "workflow_interrupted": False,
+                },
+            )
+        except Exception:
+            LOGGER.debug("Failed to send device-auth UI event", exc_info=True)
+        LOGGER.info(
+            "OIDC Device Authorization: visit %s and enter code: %s (expires in %ds)",
+            auth_url,
+            user_code,
+            expires_in,
+        )
+
     async def _start_async(
         self,
         *,
@@ -180,35 +220,57 @@ class NetworkController:
         self._last_error = None
         self.frames_repeated = 0
         self._started_at = time.perf_counter()
+        NetworkController._device_auth_info = None
 
-        orch_url = _require_https_orchestrator(self.config.orchestrator_url)
-        
-        # Configure live payments to refresh ticket params while streaming
-        live_payment_config = None
-        if self.config.payment_interval_s > 0 and self.config.signer_url:
-            live_payment_config = LivePaymentConfig(
-                interval_s=self.config.payment_interval_s,
-                width=self.config.frame_width,
-                height=self.config.frame_height,
-                fps=self.config.fps,
+        orch_url = _normalize_orchestrator(self.config.orchestrator_url)
+
+        LOGGER.info("Starting job model_id=%s orch=%s", model_id, orch_url or "(discovery)")
+        try:
+            job = await asyncio.to_thread(
+                start_lv2v,
+                orch_url,
+                StartJobRequest(
+                    model_id=model_id,
+                    params=params or None,
+                    request_id=request_id,
+                ),
+                billing_url=BILLING_URL,
+                client_id=CLIENT_ID,
+                headless=get_auth_headless(),
+                on_device_auth=self._on_device_auth,
             )
-            LOGGER.info("Live payments enabled, interval=%.2fs", self.config.payment_interval_s)
-        
-        # Create session with live payment config for automatic ticket refresh
-        session = OrchestratorSession(
-            orch_url,
-            signer_url=self.config.signer_url,
-            live_payment_config=live_payment_config,
-        )
-        
-        LOGGER.info("Starting job model_id=%s", model_id)
-        job = session.start_job(
-            StartJobRequest(
-                model_id=model_id,
-                params=params or None,
-                request_id=request_id,
-            ),
-        )
+        except Exception as exc:
+            exc_text = str(exc)
+            if _is_signer_auth_denial(exc_text):
+                refreshed, refresh_error = await asyncio.to_thread(try_refresh_auth_token)
+                if refreshed:
+                    LOGGER.info("Refreshed OIDC token after signer denial; retrying start once")
+                    job = await asyncio.to_thread(
+                        start_lv2v,
+                        orch_url,
+                        StartJobRequest(
+                            model_id=model_id,
+                            params=params or None,
+                            request_id=request_id,
+                        ),
+                        billing_url=BILLING_URL,
+                        client_id=CLIENT_ID,
+                        headless=get_auth_headless(),
+                        on_device_auth=self._on_device_auth,
+                    )
+                else:
+                    raise RuntimeError(
+                        "Livepeer session refresh failed. "
+                        f"{refresh_error} "
+                        "Click Livepeer Login in Settings and try again."
+                    ) from exc
+            else:
+                raise
+        try:
+            # Ensure per-segment payment sender is running from async context.
+            job.start_payment_sender()
+        except Exception as exc:
+            LOGGER.debug("Payment sender not started from controller loop: %s", exc)
         media = job.start_media(
             MediaPublishConfig(
                 fps=self.config.fps,
@@ -216,7 +278,6 @@ class NetworkController:
             )
         )
 
-        self.session = session
         self.job = job
         self.media = media
         self.frames_sent = 0
@@ -245,11 +306,10 @@ class NetworkController:
         if self.media:
             with contextlib.suppress(Exception):
                 await self.media.close()
-        # Close session (stops payment senders and job resources)
-        if self.session:
+        # Close job resources (control, media, etc.)
+        if self.job:
             with contextlib.suppress(Exception):
-                await self.session.aclose()
-        self.session = None
+                await self.job.close()
         self.job = None
         self.media = None
         self._publisher_task = None
@@ -350,7 +410,7 @@ class NetworkController:
         while True:
             try:
                 attempt += 1
-                async for event in self.job.events(max_buffered_events=64, overflow="drop_oldest"):
+                async for event in self.job.events(start_seq=-2, max_retries=5):
                     event_type = event.get("event_type")
                     if event_type == "status":
                         inference_status = event.get("inference_status")

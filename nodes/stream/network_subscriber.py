@@ -27,7 +27,7 @@ class NetworkSubscriber:
 
     Follows the pattern from livepeer-python-gateway examples:
     - Uses MediaOutput for trickle subscription
-    - Uses latest_video_frames() to always get the freshest frame (skipping buffered ones)
+    - Uses frames() and keeps only video frames for the bridge
     - Decodes frames and stores them in a thread-safe bridge
     """
 
@@ -97,7 +97,7 @@ class NetworkSubscriber:
     async def _consume(self, subscribe_url: str) -> None:
         """
         Consume frames from the trickle subscriber and store them in the bridge.
-        Uses latest_video_frames() to always get the freshest frame.
+        Uses frames() and filters to video-only decoded frames.
         """
         # Use print() to ensure visibility in console regardless of log level
         print(f"[SUBSCRIBER] Connecting to {subscribe_url} (start_seq={self.config.start_seq})")
@@ -107,42 +107,45 @@ class NetworkSubscriber:
             self.config.start_seq,
         )
         try:
-            output = MediaOutput(
+            async with MediaOutput(
                 subscribe_url,
                 start_seq=self.config.start_seq,
                 max_retries=self.config.max_retries,
                 chunk_size=self.config.chunk_size,
-            )
-            print("[SUBSCRIBER] MediaOutput created, starting to consume frames...")
-            LOGGER.info("Subscriber MediaOutput created, starting to consume frames...")
-            
-            # Use latest_video_frames() to skip buffered frames and always get the newest
-            async for decoded in output.latest_video_frames():
-                if not self._running:
-                    print("[SUBSCRIBER] Stopped by running flag")
-                    LOGGER.info("Subscriber stopped by running flag")
-                    break
-                
-                try:
-                    frame = decoded.frame.to_ndarray(format="rgb24")
-                    # Use thread-safe sync method since bridge is accessed from multiple threads
-                    TRICKLE_OUTPUT_BRIDGE.put_frame_sync(np.array(frame))
-                    self.frames_received += 1
-                    
-                    # Log every frame at INFO level so we can see subscriber activity
-                    if self.frames_received % 30 == 1:  # Log every 30 frames (about 1 second at 30fps)
-                        print(f"[SUBSCRIBER] Received frame {self.frames_received} ({decoded.width}x{decoded.height})")
-                        LOGGER.info(
-                            "Subscriber received frame %d (%sx%s pts=%s)",
-                            self.frames_received,
-                            decoded.width,
-                            decoded.height,
-                            decoded.pts,
-                        )
-                except Exception as frame_exc:
-                    print(f"[SUBSCRIBER] Frame processing error: {frame_exc}")
-                    LOGGER.error("Subscriber failed to process frame: %s", frame_exc, exc_info=True)
-                    continue
+            ) as output:
+                print("[SUBSCRIBER] MediaOutput created, starting to consume frames...")
+                LOGGER.info("Subscriber MediaOutput created, starting to consume frames...")
+
+                async for decoded in output.frames():
+                    if not self._running:
+                        print("[SUBSCRIBER] Stopped by running flag")
+                        LOGGER.info("Subscriber stopped by running flag")
+                        break
+
+                    if decoded.kind != "video":
+                        self.frames_skipped += 1
+                        continue
+
+                    try:
+                        frame = decoded.frame.to_ndarray(format="rgb24")
+                        # Use thread-safe sync method since bridge is accessed from multiple threads
+                        TRICKLE_OUTPUT_BRIDGE.put_frame_sync(np.array(frame))
+                        self.frames_received += 1
+
+                        # Log every frame at INFO level so we can see subscriber activity
+                        if self.frames_received % 30 == 1:  # Log every 30 frames (about 1 second at 30fps)
+                            print(f"[SUBSCRIBER] Received frame {self.frames_received} ({decoded.width}x{decoded.height})")
+                            LOGGER.info(
+                                "Subscriber received frame %d (%sx%s pts=%s)",
+                                self.frames_received,
+                                decoded.width,
+                                decoded.height,
+                                decoded.pts,
+                            )
+                    except Exception as frame_exc:
+                        print(f"[SUBSCRIBER] Frame processing error: {frame_exc}")
+                        LOGGER.error("Subscriber failed to process frame: %s", frame_exc, exc_info=True)
+                        continue
             
             print(f"[SUBSCRIBER] Finished consuming frames (total={self.frames_received})")
             LOGGER.info("Subscriber finished consuming frames (total=%d)", self.frames_received)
