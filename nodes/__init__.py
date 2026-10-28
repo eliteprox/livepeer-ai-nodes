@@ -1,7 +1,7 @@
 import logging
 import sys
 
-from . import frame_nodes, stream_url_node, pipeline_config_sdxl, pymthouse_login, js
+from . import frame_nodes, stream_url_node, pipeline_config_sdxl, pymthouse_login, creative_remote, js
 
 
 def _configure_logging():
@@ -21,6 +21,8 @@ _configure_logging()
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
+NODE_CLASS_MAPPINGS.update(creative_remote.NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(creative_remote.NODE_DISPLAY_NAME_MAPPINGS)
 
 NODE_CLASS_MAPPINGS.update(frame_nodes.NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(frame_nodes.NODE_DISPLAY_NAME_MAPPINGS)

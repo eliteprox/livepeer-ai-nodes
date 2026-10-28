@@ -7,7 +7,8 @@ Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Fra
 - 🎥 **Trickle publish/subscribe**: send/receive frames via Livepeer network
 - 🔄 **Bidirectional streaming nodes**: start, input, and output nodes for ComfyUI
 - ⚙️ **Configurable orchestrator/signer**: point at any Livepeer orchestrator, optional remote signer
-- 🔐 **PymtHouse sign-in**: public device login, signer-session refresh, and usage on one node
+- 🔐 **ComfyPeer account control**: public device login, signer-session refresh, and usage outside the workflow graph
+- 🎨 **Remote API image nodes**: FAL Flux Schnell image batches and bounded SD Turbo / Flux Klein frame jobs
 - 🧱 **FrameBridge**: sync→async bridge for safe node enqueue
 - 💡 **Pure Livepeer**: direct connection to orchestrators, no middleware required
 
@@ -56,6 +57,29 @@ After installation, you should see new nodes in the **"Trickle"** category.
 
 ## Quick Start
 
+### Creative remote workflows
+
+Load `workflows/botanical-signal-batch.json` or `workflows/botanical-signal-live.json`.
+Both connect **FAL Flux Schnell → SD Turbo → Flux Klein → image previews**.
+Sign in using the ComfyPeer account control, then enable `paid_execution` on each
+remote node when ready to run. Published templates leave paid execution disabled.
+The models run sequentially because they can share GPU capacity.
+
+Batch mode adapts the streaming endpoint; it is not a native batch inference API
+and exact per-image attribution is not guaranteed. Live mode publishes a bounded
+clip after inference warmup. The nodes check processed-frame counters and live
+output state before accepting an initial output, then stop funding and release
+sessions on completion or errors. Inspect `usage_report` for fallback statistics.
+
+Desktop users can put public issuer/client configuration in a node-local `.env`
+copied from `.env.example`; process environment takes precedence. Do not put a
+client secret or JWT in workflow JSON. Tokens stay in memory, so sign in again
+after restarting the server.
+
+Legacy StreamDiffusion config nodes remain available, but direct
+`streamdiffusion-sdxl` execution is unsupported by the current WebSocket controller.
+Use the dedicated remote frame nodes for SD Turbo and Klein.
+
 ### 1. Configure Orchestrator and PymtHouse
 
 Set environment variables:
@@ -63,28 +87,33 @@ Set environment variables:
 # Required: orchestrator URL
 export ORCHESTRATOR_URL=https://your-orchestrator.example.com:8936
 
-# Optional: remote signer used only when nobody is signed in
+# Optional: self-managed signer used only when a workflow disables the account
 export SIGNER_URL=https://signer.example
 
-# PymtHouse public OIDC client. PYMTHOUSE_CLIENT_ID is the public app_ id.
+# ComfyPeer's PymtHouse public OIDC client. This app_ ID is not a secret.
 export PYMTHOUSE_ISSUER_URL=https://your-pymthouse.example/api/v1/oidc
-export PYMTHOUSE_CLIENT_ID=app_your_public_client_id
+export COMFYPEER_PUBLIC_CLIENT_ID=app_your_comfypeer_public_client_id
 ```
 
-The PymtHouse app must allow the device-code grant (`urn:ietf:params:oauth:grant-type:device_code`), the refresh-token grant, and the scopes `openid` and `sign:job`. Leave third-party initiate login off so the Sign in button opens PymtHouse's own device page.
+The PymtHouse app must allow the device-code grant (`urn:ietf:params:oauth:grant-type:device_code`), the refresh-token grant, and the scopes `openid` and `sign:job`. Leave third-party initiate login off so the ComfyPeer account button opens PymtHouse's own device page. `PYMTHOUSE_PUBLIC_CLIENT_ID` and the legacy `PYMTHOUSE_CLIENT_ID` remain supported as environment-variable aliases.
 
-Orchestrator and fallback signer URLs can also be set on the `TrickleConfig` node. When a PymtHouse session is active, the stream uses that session's signer URL and bearer instead of the pasted signer URL.
+`TrickleConfig` uses the signed-in ComfyPeer account by default. Each job obtains a fresh signer session from the user's device-flow JWT; the fallback signer is used only if **Use ComfyPeer account** is disabled.
 
-### 2. Build a Streaming Workflow
+### 2. Sign in from ComfyUI
+
+Open **ComfyPeer account** in the lower-right of the ComfyUI canvas and select **Sign in**. The extension starts [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) device authorization, opens the issuer's verified device URL, and shows the approval code plus your current usage/balance. It is an account control, not a workflow node.
+
+### 3. Build a Streaming Workflow
 
 **Basic webcam→orchestrator workflow:**
 
 1. Add `WebcamCapture` node (from ComfyUI core)
 2. Add `TrickleConfig` node:
    - Set orchestrator URL
-   - Set signer URL (optional)
-   - Set model ID (e.g., "noop" or "comfystream")
+   - Leave **Use ComfyPeer account** enabled for the signed-in user's billing
+   - Set model ID to `comfystream` for the WebSocket workflow transport
    - Set FPS and keyframe interval
+   - Connect `model_id_out` from a pipeline configuration to `pipeline_model_id` to select the pipeline automatically
 3. Add `StartTrickleStream` node:
    - Connect config from `TrickleConfig`
    - Set width/height for the stream
@@ -93,7 +122,7 @@ Orchestrator and fallback signer URLs can also be set on the `TrickleConfig` nod
    - Connect publish_url from `StartTrickleStream`
 5. (Optional) Add `TrickleFrameOutput` node to view output frames
 
-### 3. Run Your Workflow
+### 4. Run Your Workflow
 
 - Queue the workflow in ComfyUI
 - Frames will be published to the orchestrator via trickle
@@ -109,19 +138,19 @@ Orchestrator and fallback signer URLs can also be set on the `TrickleConfig` nod
 - **TrickleFrameInput**: Enqueue frames to publish
 - **TrickleFrameOutput**: Receive frames from subscribe URL
 - **UpdateTrickleStream**: Send control messages to running stream
-- **PymtHouse Login**: Sign in with a public device flow and show usage
+- **ComfyPeer account control**: Global Sign in, usage refresh, and Sign out; it does not alter or need a graph
 
-## PymtHouse sign-in
+## ComfyPeer account and user-paid streams
 
-`PymtHouse Login` is a ComfyUI node. Its **Sign in** button is a frontend control, not a workflow execution.
+The ComfyPeer account control is a global ComfyUI extension button, separate from the graph. It uses the ComfyPeer public client for device authorization and never requires a machine-client secret on the desktop.
 
-1. Set `PYMTHOUSE_ISSUER_URL` and `PYMTHOUSE_CLIENT_ID` in the environment that launches ComfyUI.
-2. Add the **PymtHouse Login** node.
-3. Click **Sign in**. The node asks this process to start [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) device authorization against the public client, then opens a local page that redirects to the device verification URL on the configured issuer.
-4. Approve the code in the browser. The node polls the token endpoint, exchanges the user access token for a signer session ([RFC 8693](https://www.rfc-editor.org/rfc/rfc8693)), and reads `GET /api/v1/user/usage` plus `GET /api/v1/user/usage/balance`.
-5. Start a trickle stream. Payments use the signer URL from the session and `Authorization: Bearer` set to the signer JWT.
+1. Set `PYMTHOUSE_ISSUER_URL` and `COMFYPEER_PUBLIC_CLIENT_ID` in the environment that launches ComfyUI.
+2. Open **ComfyPeer account** and click **Sign in**.
+3. Approve the device code in the browser. This process polls the token endpoint, exchanges the user access token for a signer session ([RFC 8693](https://www.rfc-editor.org/rfc/rfc8693)), and reads `GET /api/v1/user/usage` plus `GET /api/v1/user/usage/balance` with that user's JWT.
+4. Build the graph from modular I/O: a frame source feeds `TrickleFrameInput`, `StartTrickleStream` creates the remote job, and `TrickleFrameOutput` supplies returned frames to any ComfyUI image operation. `StreamDiffusion SDXL Config` feeds parameters and its `model_id_out` selects `streamdiffusion-sdxl` automatically.
+5. Start the workflow. Payments use the short-lived signer URL and bearer derived from the signed-in account. `comfystream` and other enabled remote model IDs can be selected directly on `TrickleConfig`.
 
-The signer JWT lasts about five minutes. This process refreshes the user access token with the refresh-token grant, exchanges it for a new signer JWT, and updates the bearer dict the gateway payment session already holds. Tokens stay in memory. Restarting ComfyUI requires Sign in again.
+The signer JWT lasts about five minutes. This process refreshes the user access token with the refresh-token grant, exchanges it for a new signer JWT, and updates the bearer dict the gateway payment session already holds. Tokens stay only in memory, are never returned to the browser UI or workflow JSON, and are cleared by **Sign out**. Restarting ComfyUI requires Sign in again.
 
 No machine-client secret is stored here. Signer-session exchange authenticates with the user access token alone.
 
@@ -151,11 +180,11 @@ ComfyUI Node (sync)
 ```bash
 # Livepeer network
 ORCHESTRATOR_URL=https://orchestrator.example.com:8936
-SIGNER_URL=https://signer.example  # optional fallback when not signed in
+SIGNER_URL=https://signer.example  # optional fallback when account use is disabled
 
-# PymtHouse public client
+# ComfyPeer public client (app_ ID, not a secret)
 PYMTHOUSE_ISSUER_URL=https://your-pymthouse.example/api/v1/oidc
-PYMTHOUSE_CLIENT_ID=app_your_public_client_id
+COMFYPEER_PUBLIC_CLIENT_ID=app_your_comfypeer_public_client_id
 ```
 
 

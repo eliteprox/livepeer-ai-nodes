@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import cv2
 
-from .pymthouse_session import stream_signer
+from .pymthouse_session import get_login_session, stream_signer
 from .stream.credentials import resolve_network_config
 from .stream.frame_bridge import enqueue_tensor_frame, enqueue_tensor_batch, queue_depth, has_loop, FRAME_BRIDGE
 from .stream.network_controller import NetworkController, NetworkControllerConfig
@@ -201,11 +201,17 @@ class TrickleConfig:
                 }),
                 "signer_url": ("STRING", {
                     "default": "https://signer.eliteencoder.net",
-                    "tooltip": "Signer URL for authentication",
+                    "tooltip": "Fallback signer URL. Used only when Use ComfyPeer account is disabled.",
                 }),
                 "model_id": ("STRING", {
-                    "default": "noop",
-                    "tooltip": "Model ID to use (e.g., noop, comfystream)",
+                    "default": "streamdiffusion-sdxl",
+                    "tooltip": "Remote pipeline ID, such as streamdiffusion-sdxl or comfystream.",
+                }),
+                "use_comfypeer_account": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Use ComfyPeer account",
+                    "label_off": "Use fallback signer",
+                    "tooltip": "Require the signed-in ComfyPeer account for this user's paid remote job.",
                 }),
                 "fps": ("FLOAT", {
                     "default": 30.0,
@@ -226,6 +232,9 @@ class TrickleConfig:
                 "pipeline_params": ("DICT", {
                     "tooltip": "Connect pipeline config (e.g., StreamDiffusion SDXL params_dict output)",
                 }),
+                "pipeline_model_id": ("STRING", {
+                    "tooltip": "Connect model_id_out from a pipeline config to select its remote pipeline automatically.",
+                }),
             },
         }
 
@@ -239,14 +248,22 @@ class TrickleConfig:
         orchestrator_url: str,
         signer_url: str,
         model_id: str,
+        use_comfypeer_account: bool,
         fps: float,
         keyframe_interval: float,
         pipeline_params: Dict[str, Any] = None,
+        pipeline_model_id: str = "",
     ) -> tuple:
+        selected_model_id = (
+            pipeline_model_id.strip()
+            if isinstance(pipeline_model_id, str) and pipeline_model_id.strip()
+            else model_id.strip()
+        ) or "streamdiffusion-sdxl"
         config = {
             "orchestrator_url": orchestrator_url,
             "signer_url": signer_url,
-            "model_id": model_id,
+            "model_id": selected_model_id,
+            "use_comfypeer_account": bool(use_comfypeer_account),
             "fps": fps,
             "keyframe_interval": keyframe_interval,
             "pipeline_params": pipeline_params or {},
@@ -431,18 +448,37 @@ class StartTrickleStream:
         # Extract values from config
         orchestrator_url = config.get("orchestrator_url", "https://localhost:8935")
         signer_url = config.get("signer_url", "")
-        model_id = config.get("model_id", "noop")
+        model_id = config.get("model_id", "streamdiffusion-sdxl")
+        use_comfypeer_account = bool(config.get("use_comfypeer_account", True))
         fps = config.get("fps", 30.0)
         keyframe_interval = config.get("keyframe_interval", 2.0)
         
         # Pipeline params passed through from TrickleConfig
         pipeline_params = config.get("pipeline_params", {})
 
-        resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
-        signer_headers = None
-        session_signer = stream_signer()
-        if session_signer is not None:
+        if use_comfypeer_account:
+            try:
+                session_signer = stream_signer()
+            except Exception as exc:
+                error_msg = f"ComfyPeer account could not refresh its stream session: {exc}"
+                _NETWORK_RUNTIME.last_startup_error = error_msg
+                self._status_cache = ("", "", "", error_msg)
+                return {"ui": {"text": [f"ERROR: {error_msg}"]}, "result": self._status_cache}
+            if session_signer is None:
+                account = get_login_session().public_status()
+                detail = str(account.get("message") or "Not signed in")
+                error_msg = (
+                    "Sign in from the ComfyPeer account button before starting a remote stream. "
+                    f"Account status: {detail}"
+                )
+                _NETWORK_RUNTIME.last_startup_error = error_msg
+                self._status_cache = ("", "", "", error_msg)
+                return {"ui": {"text": [f"ERROR: {error_msg}"]}, "result": self._status_cache}
+            resolved_orch, _ = resolve_network_config(orchestrator_url, signer_url)
             resolved_signer, signer_headers = session_signer
+        else:
+            resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
+            signer_headers = None
         controller_config = NetworkControllerConfig(
             orchestrator_url=resolved_orch,
             signer_url=resolved_signer or None,
@@ -1042,15 +1078,17 @@ class TrickleFrameOutput:
         
         # Check if subscriber is active
         subscriber = _NETWORK_RUNTIME.subscriber
-        if not subscriber:
+        controller = _NETWORK_RUNTIME.controller
+        websocket_active = bool(controller and controller.running and controller.ws is not None)
+        if not subscriber and not websocket_active:
             return self._return_with_preview(self._blank, unique_id)
         
         # Check if task has crashed
-        task_error = subscriber.check_task_exception()
+        task_error = subscriber.check_task_exception() if subscriber else None
         if task_error:
             LOGGER.warning("TrickleFrameOutput: Subscriber task crashed: %s", task_error)
         
-        if not subscriber.running and not subscriber.task_alive:
+        if subscriber and not subscriber.running and not subscriber.task_alive and not websocket_active:
             return self._return_with_preview(self._blank, unique_id)
         
         try:

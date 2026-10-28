@@ -227,6 +227,16 @@ def test_settings_require_issuer_and_public_client_id():
     assert auth.api_origin(ISSUER) == "https://issuer.example"
 
 
+def test_comfypeer_public_client_id_is_preferred_over_legacy_aliases():
+    settings = auth.load_settings_from_env({
+        "PYMTHOUSE_ISSUER_URL": ISSUER,
+        "COMFYPEER_PUBLIC_CLIENT_ID": "app_comfypeer",
+        "PYMTHOUSE_PUBLIC_CLIENT_ID": "app_pymthouse_public",
+        "PYMTHOUSE_CLIENT_ID": "app_legacy",
+    })
+    assert settings.client_id == "app_comfypeer"
+
+
 def test_verification_url_must_be_http():
     with pytest.raises(auth.PymtHouseAuthError):
         auth.public_verification_url("javascript:alert(1)")

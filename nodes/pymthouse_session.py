@@ -1,4 +1,8 @@
-"""In-process PymtHouse login. Tokens stay in this ComfyUI process."""
+"""In-process ComfyPeer/PymtHouse account session for ComfyUI.
+
+User and signer JWTs never leave this process.  The frontend receives only
+device-flow state and the account's own usage data.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from .pymthouse_auth import (
     PymtHouseClient,
     expires_at_from,
     format_usage_summary,
-    load_settings_from_env,
+    load_runtime_settings,
     set_bearer,
 )
 
@@ -35,6 +39,8 @@ class _LoginState:
     verification_uri_complete: str = ""
     message: str = "Not signed in"
     usage_summary: str = ""
+    usage: dict[str, object] = field(default_factory=dict)
+    balance: dict[str, object] = field(default_factory=dict)
     access_token: str = ""
     refresh_token: str = ""
     access_expires_at: float = 0.0
@@ -82,6 +88,11 @@ class LoginSession:
                 "verification_uri_complete": self._state.verification_uri_complete if pending else "",
                 "message": self._state.message,
                 "usage_summary": self._state.usage_summary,
+                # These are the signed-in user's own account records.  Do not
+                # add access_token, refresh_token, signer_headers, or any
+                # other credential to this local-UI response.
+                "usage": dict(self._state.usage),
+                "balance": dict(self._state.balance),
             }
 
     def verification_redirect(self) -> str:
@@ -102,6 +113,16 @@ class LoginSession:
         runtime = self._ensure_runtime()
         return await runtime.await_coro(self._begin_login())
 
+    async def refresh_usage(self) -> dict[str, object]:
+        """Refresh the signed-in user's usage without exposing their JWT."""
+        runtime = self._ensure_runtime()
+        return await runtime.await_coro(self._refresh_usage())
+
+    async def sign_out(self) -> dict[str, object]:
+        """Forget all local credentials and stop background account work."""
+        runtime = self._ensure_runtime()
+        return await runtime.await_coro(self._sign_out())
+
     def refresh_for_stream(self, timeout: float = 20.0) -> Optional[tuple[str, dict[str, str]]]:
         if self.public_status()["status"] != "signed_in":
             return None
@@ -116,21 +137,28 @@ class LoginSession:
 
     def _client_or_create(self) -> PymtHouseClient:
         if self._client is None:
-            self._client = PymtHouseClient(load_settings_from_env(os.environ))
+            self._client = PymtHouseClient(load_runtime_settings(os.environ))
         return self._client
 
     async def _begin_login(self) -> dict[str, object]:
-        client = self._client_or_create()
-        self._cancel_task(self._poll_task)
-        self._cancel_task(self._refresh_task)
-        device = await client.start_device_login()
+        await self._discard_session(status="pending", message="Starting secure sign-in…")
+        try:
+            client = self._client_or_create()
+            device = await client.start_device_login()
+        except PymtHouseAuthError as exc:
+            self._fail(exc.message)
+            raise
+        except Exception:
+            LOGGER.exception("ComfyPeer device login could not be started")
+            self._fail("Could not start sign-in.")
+            raise
         with self._lock:
             self._state.status = "pending"
             self._state.user_code = device.user_code
             self._state.verification_uri_complete = device.verification_uri_complete
             self._state.message = f"Enter {device.user_code} in the browser to finish sign-in."
             self._state.usage_summary = ""
-        LOGGER.info("PymtHouse device login started user_code=%s", device.user_code)
+        LOGGER.info("ComfyPeer device login started user_code=%s", device.user_code)
         self._poll_task = asyncio.create_task(self._poll_until_approved(device), name="pymthouse-device-poll")
         return self.public_status()
 
@@ -148,7 +176,7 @@ class LoginSession:
                 summary = self._state.usage_summary
                 self._state.message = f"Signed in. {summary}".strip()
             self._refresh_task = asyncio.create_task(self._refresh_loop(), name="pymthouse-refresh")
-            LOGGER.info("PymtHouse sign-in complete")
+            LOGGER.info("ComfyPeer sign-in complete")
         except PymtHouseAuthError as exc:
             self._fail(exc.message)
         except Exception:
@@ -187,6 +215,41 @@ class LoginSession:
         if signer_expires_at - now <= REFRESH_SKEW_S and access_token:
             await self._exchange_signer()
 
+    async def _refresh_usage(self) -> dict[str, object]:
+        if self.public_status()["status"] != "signed_in":
+            raise PymtHouseAuthError("Sign in to your ComfyPeer account first.")
+        await self._ensure_fresh()
+        await self._load_usage()
+        with self._lock:
+            summary = self._state.usage_summary
+            self._state.message = f"Signed in. {summary}".strip()
+        return self.public_status()
+
+    async def _sign_out(self) -> dict[str, object]:
+        await self._discard_session(status="idle", message="Signed out")
+        LOGGER.info("ComfyPeer account signed out and local tokens were cleared")
+        return self.public_status()
+
+    async def _discard_session(self, *, status: str, message: str) -> None:
+        """Cancel auth work, clear credentials, and retire the HTTP client."""
+        self._cancel_task(self._poll_task)
+        self._cancel_task(self._refresh_task)
+        self._poll_task = None
+        self._refresh_task = None
+        with self._lock:
+            client = self._client
+            self._client = None
+            # The gateway holds this dictionary by reference while a stream is
+            # active.  Clearing it prevents a signed-out account from being
+            # used for a subsequent paid request.
+            self._state.signer_headers.clear()
+            self._state = _LoginState(status=status, message=message)
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:  # pragma: no cover - cleanup must not block logout
+                LOGGER.debug("Could not close PymtHouse HTTP client", exc_info=True)
+
     async def _exchange_signer(self) -> None:
         client = self._client_or_create()
         with self._lock:
@@ -214,13 +277,17 @@ class LoginSession:
         try:
             usage, balance = await client.fetch_usage(access_token)
         except PymtHouseAuthError as exc:
-            LOGGER.info("PymtHouse usage read failed: %s", exc.message)
+            LOGGER.info("ComfyPeer usage read failed: %s", exc.message)
             with self._lock:
                 self._state.usage_summary = "usage unavailable"
+                self._state.usage = {}
+                self._state.balance = {}
             return
         summary = format_usage_summary(usage, balance)
         with self._lock:
             self._state.usage_summary = summary
+            self._state.usage = usage
+            self._state.balance = balance
 
     def _store_user_token(self, token: dict) -> None:
         access_token = token.get("access_token")
@@ -243,7 +310,13 @@ class LoginSession:
             self._state.message = message
             self._state.user_code = ""
             self._state.verification_uri_complete = ""
-        LOGGER.info("PymtHouse sign-in error: %s", message)
+            self._state.access_token = ""
+            self._state.refresh_token = ""
+            self._state.access_expires_at = 0.0
+            self._state.signer_expires_at = 0.0
+            self._state.signer_url = ""
+            self._state.signer_headers.clear()
+        LOGGER.info("ComfyPeer sign-in error: %s", message)
 
     @staticmethod
     def _cancel_task(task: Optional[asyncio.Task]) -> None:

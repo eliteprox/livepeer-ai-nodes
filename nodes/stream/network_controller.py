@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import threading
@@ -16,10 +17,12 @@ import cv2
 import av
 import numpy as np
 
-from livepeer_gateway.lv2v import LiveVideoToVideo, StartJobRequest, start_lv2v
-from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig, VideoOutputConfig
+import aiohttp
+from livepeer_gateway.live_runner import LiveRunnerSession, stop_runner_session
+from livepeer_gateway.selection import reserve_session
 
 from .frame_bridge import FRAME_BRIDGE, array_to_av_frame, normalize_uint8_frame
+from .trickle_output_bridge import TRICKLE_OUTPUT_BRIDGE
 
 LOGGER = logging.getLogger("comfyui_trickle.network_controller")
 
@@ -59,10 +62,11 @@ class NetworkController:
         self.config = config
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
-        self.job: Optional[LiveVideoToVideo] = None
-        self.media: Optional[MediaPublish] = None
+        self.job: Optional[LiveRunnerSession] = None
+        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._ws_client: Optional[aiohttp.ClientSession] = None
         self._publisher_task: Optional[asyncio.Task] = None
-        self._events_task: Optional[asyncio.Task] = None
+        self._receiver_task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.frames_sent: int = 0
         self.frames_repeated: int = 0
@@ -134,10 +138,13 @@ class NetworkController:
             "running": self.running,
             "frames_sent": self.frames_sent,
             "frames_repeated": self.frames_repeated,
-            "publish_url": info.publish_url if info else "",
-            "subscribe_url": info.subscribe_url if info else "",
+            # A ComfyStream live runner accepts input on ws_stream and pushes
+            # output frames back on the same socket.  Keep the established
+            # node output names so older workflows continue to execute.
+            "publish_url": self._ws_url(info.app_url) if info else "",
+            "subscribe_url": "",
             "control_url": info.control_url if info else "",
-            "manifest_id": info.manifest_id if info else "",
+            "manifest_id": info.session_id if info else "",
             "model_id": self.config.model_id,
             "fps": self.config.fps,
             "frame_width": self.config.frame_width,
@@ -163,39 +170,52 @@ class NetworkController:
 
         orch_url = _require_https_orchestrator(self.config.orchestrator_url)
 
-        LOGGER.info("Starting job model_id=%s", model_id)
-        # start_lv2v is synchronous and starts the payment task only when called
-        # on a running loop. PaymentSession keeps signer_headers by reference.
-        job = start_lv2v(
-            orch_url,
-            StartJobRequest(
-                model_id=model_id,
-                params=params or None,
-                request_id=request_id,
-            ),
+        if model_id.strip() != "comfystream":
+            raise ValueError("This transport supports app=comfystream with an API-format workflow. "
+                             "The requested pipeline requires a separate transport: " + model_id)
+        if not params:
+            params = {
+                "1": {"class_type": "LoadTensor", "inputs": {}},
+                "2": {"class_type": "SaveTensor", "inputs": {"images": ["1", 0]}},
+            }
+        # The gateway's current live-runner contract reserves the app first,
+        # then exchanges JPEG frames on /ws_stream.  ``model_id`` is retained
+        # as a node-facing pipeline label; all current ComfyPeer pipelines run
+        # behind the ``comfystream`` live-runner app.
+        if model_id.strip() and model_id.strip() != "comfystream":
+            LOGGER.info("Starting ComfyStream pipeline label=%s", model_id)
+        job = await reserve_session(
+            orchestrators=[orch_url],
+            app="comfystream",
             signer_url=self.config.signer_url,
             signer_headers=self.config.signer_headers,
+            timeout=20.0,
         )
-        media = job.start_media(
-            MediaPublishConfig(
-                tracks=[
-                    VideoOutputConfig(
-                        fps=self.config.fps,
-                        keyframe_interval_s=self.config.keyframe_interval_s,
-                    ),
-                ],
-            )
-        )
+        ws_url = self._ws_url(job.app_url)
+        self._ws_client = aiohttp.ClientSession()
+        try:
+            self.ws = await self._ws_client.ws_connect(ws_url, timeout=aiohttp.ClientTimeout(total=20.0))
+            await self.ws.send_json({
+                "type": "start",
+                # A caller can supply an API-format Comfy workflow directly.
+                "prompts": params or {},
+                "width": self.config.frame_width,
+                "height": self.config.frame_height,
+                "request_id": request_id or "",
+            })
+            await self._await_ready()
+        except Exception:
+            await self._close_transport()
+            await stop_runner_session(job)
+            raise
 
         self.job = job
-        self.media = media
         self.frames_sent = 0
         self.running = True
         self._stop_event = asyncio.Event()
         self._publisher_task = asyncio.create_task(self._publisher_loop(), name="network-publisher")
-        if self.job and self.job.events:
-            self._events_task = asyncio.create_task(self._events_monitor_loop(), name="network-events")
-        LOGGER.info("NetworkController started publish_url=%s", job.publish_url)
+        self._receiver_task = asyncio.create_task(self._receiver_loop(), name="network-receiver")
+        LOGGER.info("NetworkController started websocket=%s", ws_url)
         return self.status()
 
     async def _stop_async(self) -> None:
@@ -207,16 +227,16 @@ class NetworkController:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._publisher_task
             self._publisher_task = None
-        if self._events_task:
-            self._events_task.cancel()
+        if self._receiver_task:
+            self._receiver_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._events_task
-            self._events_task = None
+                await self._receiver_task
+            self._receiver_task = None
         if self.job:
             with contextlib.suppress(Exception):
-                await self.job.close()
+                await stop_runner_session(self.job)
+        await self._close_transport()
         self.job = None
-        self.media = None
         self._publisher_task = None
         self._stop_event = None
         self.frames_sent = 0
@@ -226,9 +246,6 @@ class NetworkController:
         self._started_at = None
 
     async def _publisher_loop(self) -> None:
-        assert self.media
-        pts = 0
-        time_base = Fraction(1, int(round(self.config.fps)))
         frame_interval = 1.0 / float(self.config.fps) if self.config.fps > 0 else 0.033
         next_frame_time = time.perf_counter()
         last_frame: Optional[np.ndarray] = None
@@ -263,10 +280,11 @@ class NetworkController:
                 continue
 
             try:
-                av_frame = self._to_av_frame(frame, pts, time_base)
-                await self.media.write_frame(av_frame)
+                if self.ws is None or self.ws.closed:
+                    raise RuntimeError("ComfyStream WebSocket is closed")
+                payload = self._encode_jpeg(frame)
+                await self.ws.send_bytes(payload)
                 self.frames_sent += 1
-                pts += 1
                 if self._stream_state == self.StreamState.STARTING:
                     self._stream_state = self.StreamState.RUNNING
                 if got_new_frame:
@@ -283,7 +301,7 @@ class NetworkController:
                     "stream not found" in exc_str or
                     "post failed" in exc_str or
                     "encoder failed" in exc_str or
-                    "mediapublish" in exc_str
+                    "websocket" in exc_str
                 )
                 if is_fatal:
                     LOGGER.error("Stream terminated (fatal error): %s", exc)
@@ -305,50 +323,69 @@ class NetworkController:
             self.running = False
         LOGGER.info("Publisher loop exit (state=%s, running=%s)", self._stream_state.value, self.running)
 
-    async def _events_monitor_loop(self) -> None:
-        """
-        Monitor events URL for stream status and errors. Uses SDK's job.events().
-        """
-        assert self.job
-        start_wait = time.perf_counter()
-        attempt = 0
+    async def _await_ready(self) -> None:
+        """Wait for the app-level ready message before accepting frames."""
+        assert self.ws is not None
         while True:
-            try:
-                attempt += 1
-                async for event in self.job.events():
-                    event_type = event.get("event_type")
-                    if event_type == "status":
-                        inference_status = event.get("inference_status")
-                        LOGGER.info("Stream status event: %s", inference_status)
-                # If the iterator exits gracefully, treat as closed
-                break
-            except Exception as exc:
-                elapsed = time.perf_counter() - start_wait
-                if elapsed <= self._events_wait_seconds:
-                    LOGGER.info(
-                        "Events stream not ready (attempt=%s, elapsed=%.2fs): %s",
-                        attempt,
-                        elapsed,
-                        exc,
-                    )
-                    await asyncio.sleep(0.5)
-                    continue
-                LOGGER.error("Events stream error after retries: %s", exc)
-                self._stream_state = self.StreamState.ERROR
-                self._last_error = str(exc)
-                if self._stop_event:
-                    self._stop_event.set()
-                break
+            message = await self.ws.receive(timeout=20.0)
+            if message.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(message.data)
+                if data.get("type") == "ready":
+                    return
+                if data.get("type") == "error":
+                    raise RuntimeError(data.get("error") or "ComfyStream rejected the workflow")
+            elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                raise RuntimeError("ComfyStream closed before it became ready")
 
-        if self._stream_state not in (self.StreamState.ERROR, self.StreamState.CLOSED):
-            self._stream_state = self.StreamState.CLOSED
-            self._last_error = "Events stream closed"
-            LOGGER.info("Events stream closed, marking stream as CLOSED")
-        
-        # Signal that stream has ended
-        self.running = False
-        if self._stop_event:
-            self._stop_event.set()
+    async def _receiver_loop(self) -> None:
+        """Convert remote JPEG output into the existing ComfyUI output bridge."""
+        assert self.ws is not None
+        try:
+            async for message in self.ws:
+                if message.type == aiohttp.WSMsgType.BINARY:
+                    decoded = cv2.imdecode(np.frombuffer(message.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if decoded is None:
+                        LOGGER.warning("ComfyStream sent an undecodable output frame")
+                        continue
+                    TRICKLE_OUTPUT_BRIDGE.put_frame_sync(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
+                elif message.type == aiohttp.WSMsgType.TEXT:
+                    data = json.loads(message.data)
+                    if data.get("type") == "error":
+                        raise RuntimeError(data.get("error") or "ComfyStream stream error")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.error("ComfyStream receiver stopped: %s", exc)
+            self._stream_state = self.StreamState.ERROR
+            self._last_error = str(exc)
+            self.running = False
+            if self._stop_event:
+                self._stop_event.set()
+
+    async def _close_transport(self) -> None:
+        ws, client = self.ws, self._ws_client
+        self.ws, self._ws_client = None, None
+        if ws is not None and not ws.closed:
+            with contextlib.suppress(Exception):
+                await ws.send_str("eos")
+            with contextlib.suppress(Exception):
+                await ws.close()
+        if client is not None and not client.closed:
+            await client.close()
+
+    @staticmethod
+    def _ws_url(app_url: str) -> str:
+        parsed = urlparse(app_url.rstrip("/") + "/ws_stream")
+        scheme = "wss" if parsed.scheme == "https" else "ws"
+        return parsed._replace(scheme=scheme).geturl()
+
+    @staticmethod
+    def _encode_jpeg(frame: np.ndarray) -> bytes:
+        rgb = normalize_uint8_frame(frame)
+        ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok:
+            raise RuntimeError("Could not encode input frame as JPEG")
+        return encoded.tobytes()
 
     def get_health(self) -> Dict[str, Any]:
         """
@@ -396,8 +433,8 @@ class NetworkController:
             return False
         
         # Check if events task has finished (events stream closed = stream likely dead)
-        if self._events_task and self._events_task.done():
-            exc = self._events_task.exception() if not self._events_task.cancelled() else None
+        if self._receiver_task and self._receiver_task.done():
+            exc = self._receiver_task.exception() if not self._receiver_task.cancelled() else None
             if exc:
                 LOGGER.warning("Events task exited with exception: %s", exc)
                 if not self._last_error:

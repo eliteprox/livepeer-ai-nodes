@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 from urllib.parse import quote, urlparse
 
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.httpx_client import AsyncOAuth2Client
+from dotenv import dotenv_values
 
 DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
@@ -123,16 +125,43 @@ def format_usage_summary(usage: Mapping[str, Any], balance: Mapping[str, Any]) -
 
 def load_settings_from_env(env: Mapping[str, str]) -> PymtHouseSettings:
     issuer_url = (env.get("PYMTHOUSE_ISSUER_URL") or "").strip()
-    client_id = (env.get("PYMTHOUSE_CLIENT_ID") or "").strip()
+    # ComfyPeer is the public desktop client.  Keep the older name as a
+    # compatibility fallback for existing ComfyUI installations; none of
+    # these values are a client secret.
+    client_id = next(
+        (
+            value.strip()
+            for key in (
+                "COMFYPEER_PUBLIC_CLIENT_ID",
+                "PYMTHOUSE_PUBLIC_CLIENT_ID",
+                "PYMTHOUSE_CLIENT_ID",
+            )
+            if (value := env.get(key)) and value.strip()
+        ),
+        "",
+    )
     if not issuer_url or not client_id:
         raise PymtHouseAuthError(
-            "Set PYMTHOUSE_ISSUER_URL and PYMTHOUSE_CLIENT_ID before signing in."
+            "Set PYMTHOUSE_ISSUER_URL and COMFYPEER_PUBLIC_CLIENT_ID before signing in."
         )
     api_origin(issuer_url)
     return PymtHouseSettings(
         issuer_url=issuer_url.rstrip("/"),
         client_id=client_id,
     )
+
+
+def load_runtime_settings(env: Mapping[str, str]) -> PymtHouseSettings:
+    """Load public desktop config from the node's .env and process environment.
+
+    ComfyUI Desktop starts outside a shell, so custom-node .env files are not
+    inherited automatically. The issuer and public client ID are safe here;
+    no client secret is read or supported.
+    """
+    local_env = dotenv_values(Path(__file__).resolve().parents[1] / ".env")
+    merged = {key: value for key, value in local_env.items() if isinstance(value, str)}
+    merged.update({key: value for key, value in env.items() if isinstance(value, str)})
+    return load_settings_from_env(merged)
 
 
 class PymtHouseClient:
@@ -281,6 +310,10 @@ class PymtHouseClient:
         usage = await self._get_json(f"{self.origin}/api/v1/user/usage", headers)
         balance = await self._get_json(f"{self.origin}/api/v1/user/usage/balance", headers)
         return usage, balance
+
+    async def close(self) -> None:
+        """Release the HTTP client when an account is switched or signed out."""
+        await self._http.aclose()
 
     async def _get_json(self, url: str, headers: dict[str, str]) -> dict[str, Any]:
         response = await self._http.request(
