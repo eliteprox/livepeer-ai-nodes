@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import cv2
 
+from .pymthouse_session import stream_signer
 from .stream.credentials import resolve_network_config
 from .stream.frame_bridge import enqueue_tensor_frame, enqueue_tensor_batch, queue_depth, has_loop, FRAME_BRIDGE
 from .stream.network_controller import NetworkController, NetworkControllerConfig
@@ -438,15 +439,19 @@ class StartTrickleStream:
         pipeline_params = config.get("pipeline_params", {})
 
         resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
+        signer_headers = None
+        session_signer = stream_signer()
+        if session_signer is not None:
+            resolved_signer, signer_headers = session_signer
         controller_config = NetworkControllerConfig(
             orchestrator_url=resolved_orch,
             signer_url=resolved_signer or None,
+            signer_headers=signer_headers,
             model_id=model_id,
             fps=float(fps),
             frame_width=width,
             frame_height=height,
             keyframe_interval_s=float(keyframe_interval),
-
         )
         controller = _get_controller(controller_config)
 

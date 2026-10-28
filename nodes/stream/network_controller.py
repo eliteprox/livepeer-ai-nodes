@@ -16,31 +16,12 @@ import cv2
 import av
 import numpy as np
 
-# Enable HTTP signers for local development (must be set before importing SDK)
-os.environ.setdefault("ALLOW_HTTP_SIGNER", "1")
-
-
-from livepeer_gateway.live_payment import LivePaymentConfig
-from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig
-from livepeer_gateway.orchestrator import (
-    LiveVideoToVideo,
-    StartJobRequest,
-)
-from livepeer_gateway.orchestrator_session import OrchestratorSession
-
+from livepeer_gateway.lv2v import LiveVideoToVideo, StartJobRequest, start_lv2v
+from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig, VideoOutputConfig
 
 from .frame_bridge import FRAME_BRIDGE, array_to_av_frame, normalize_uint8_frame
 
 LOGGER = logging.getLogger("comfyui_trickle.network_controller")
-
-
-def _ensure_allow_http_signer() -> None:
-    """
-    Ensure ALLOW_HTTP_SIGNER is set before initializing orchestrator client.
-    """
-    if os.environ.get("ALLOW_HTTP_SIGNER") != "1":
-        os.environ["ALLOW_HTTP_SIGNER"] = "1"
-        LOGGER.debug("ALLOW_HTTP_SIGNER set to 1 for orchestrator client initialization")
 
 
 # Enforce orchestrator URLs stay https (transcoder endpoints are always https)
@@ -58,6 +39,7 @@ def _require_https_orchestrator(url: str) -> str:
 class NetworkControllerConfig:
     orchestrator_url: str
     signer_url: Optional[str] = None
+    signer_headers: Optional[Dict[str, str]] = None
     model_id: str = "comfystream"
     fps: float = 30.0
     frame_width: int = 512
@@ -77,7 +59,6 @@ class NetworkController:
         self.config = config
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
-        self.session: Optional[OrchestratorSession] = None
         self.job: Optional[LiveVideoToVideo] = None
         self.media: Optional[MediaPublish] = None
         self._publisher_task: Optional[asyncio.Task] = None
@@ -173,7 +154,6 @@ class NetworkController:
         params: Dict[str, Any],
         request_id: Optional[str],
     ) -> Dict[str, Any]:
-        _ensure_allow_http_signer()
         await self._stop_async()
         assert self.loop
         self._stream_state = self.StreamState.STARTING
@@ -182,41 +162,31 @@ class NetworkController:
         self._started_at = time.perf_counter()
 
         orch_url = _require_https_orchestrator(self.config.orchestrator_url)
-        
-        # Configure live payments to refresh ticket params while streaming
-        live_payment_config = None
-        if self.config.payment_interval_s > 0 and self.config.signer_url:
-            live_payment_config = LivePaymentConfig(
-                interval_s=self.config.payment_interval_s,
-                width=self.config.frame_width,
-                height=self.config.frame_height,
-                fps=self.config.fps,
-            )
-            LOGGER.info("Live payments enabled, interval=%.2fs", self.config.payment_interval_s)
-        
-        # Create session with live payment config for automatic ticket refresh
-        session = OrchestratorSession(
-            orch_url,
-            signer_url=self.config.signer_url,
-            live_payment_config=live_payment_config,
-        )
-        
+
         LOGGER.info("Starting job model_id=%s", model_id)
-        job = session.start_job(
+        # start_lv2v is synchronous and starts the payment task only when called
+        # on a running loop. PaymentSession keeps signer_headers by reference.
+        job = start_lv2v(
+            orch_url,
             StartJobRequest(
                 model_id=model_id,
                 params=params or None,
                 request_id=request_id,
             ),
+            signer_url=self.config.signer_url,
+            signer_headers=self.config.signer_headers,
         )
         media = job.start_media(
             MediaPublishConfig(
-                fps=self.config.fps,
-                keyframe_interval_s=self.config.keyframe_interval_s,
+                tracks=[
+                    VideoOutputConfig(
+                        fps=self.config.fps,
+                        keyframe_interval_s=self.config.keyframe_interval_s,
+                    ),
+                ],
             )
         )
 
-        self.session = session
         self.job = job
         self.media = media
         self.frames_sent = 0
@@ -242,14 +212,9 @@ class NetworkController:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._events_task
             self._events_task = None
-        if self.media:
+        if self.job:
             with contextlib.suppress(Exception):
-                await self.media.close()
-        # Close session (stops payment senders and job resources)
-        if self.session:
-            with contextlib.suppress(Exception):
-                await self.session.aclose()
-        self.session = None
+                await self.job.close()
         self.job = None
         self.media = None
         self._publisher_task = None
@@ -350,7 +315,7 @@ class NetworkController:
         while True:
             try:
                 attempt += 1
-                async for event in self.job.events(max_buffered_events=64, overflow="drop_oldest"):
+                async for event in self.job.events():
                     event_type = event.get("event_type")
                     if event_type == "status":
                         inference_status = event.get("inference_status")

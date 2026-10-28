@@ -7,6 +7,7 @@ Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Fra
 - 🎥 **Trickle publish/subscribe**: send/receive frames via Livepeer network
 - 🔄 **Bidirectional streaming nodes**: start, input, and output nodes for ComfyUI
 - ⚙️ **Configurable orchestrator/signer**: point at any Livepeer orchestrator, optional remote signer
+- 🔐 **PymtHouse sign-in**: public device login, signer-session refresh, and usage on one node
 - 🧱 **FrameBridge**: sync→async bridge for safe node enqueue
 - 💡 **Pure Livepeer**: direct connection to orchestrators, no middleware required
 
@@ -55,18 +56,24 @@ After installation, you should see new nodes in the **"Trickle"** category.
 
 ## Quick Start
 
-### 1. Configure Orchestrator/Signer (Optional)
+### 1. Configure Orchestrator and PymtHouse
 
 Set environment variables:
 ```bash
 # Required: orchestrator URL
 export ORCHESTRATOR_URL=https://your-orchestrator.example.com:8936
 
-# Optional: remote signer for authentication
-export SIGNER_URL=https://signer.eliteencoder.net
+# Optional: remote signer used only when nobody is signed in
+export SIGNER_URL=https://signer.example
+
+# PymtHouse public OIDC client. PYMTHOUSE_CLIENT_ID is the public app_ id.
+export PYMTHOUSE_ISSUER_URL=https://your-pymthouse.example/api/v1/oidc
+export PYMTHOUSE_CLIENT_ID=app_your_public_client_id
 ```
 
-Or configure via the `TrickleConfig` node in your workflow.
+The PymtHouse app must allow the device-code grant (`urn:ietf:params:oauth:grant-type:device_code`), the refresh-token grant, and the scopes `openid` and `sign:job`. Leave third-party initiate login off so the Sign in button opens PymtHouse's own device page.
+
+Orchestrator and fallback signer URLs can also be set on the `TrickleConfig` node. When a PymtHouse session is active, the stream uses that session's signer URL and bearer instead of the pasted signer URL.
 
 ### 2. Build a Streaming Workflow
 
@@ -102,6 +109,21 @@ Or configure via the `TrickleConfig` node in your workflow.
 - **TrickleFrameInput**: Enqueue frames to publish
 - **TrickleFrameOutput**: Receive frames from subscribe URL
 - **UpdateTrickleStream**: Send control messages to running stream
+- **PymtHouse Login**: Sign in with a public device flow and show usage
+
+## PymtHouse sign-in
+
+`PymtHouse Login` is a ComfyUI node. Its **Sign in** button is a frontend control, not a workflow execution.
+
+1. Set `PYMTHOUSE_ISSUER_URL` and `PYMTHOUSE_CLIENT_ID` in the environment that launches ComfyUI.
+2. Add the **PymtHouse Login** node.
+3. Click **Sign in**. The node asks this process to start [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) device authorization against the public client, then opens a local page that redirects to the device verification URL on the configured issuer.
+4. Approve the code in the browser. The node polls the token endpoint, exchanges the user access token for a signer session ([RFC 8693](https://www.rfc-editor.org/rfc/rfc8693)), and reads `GET /api/v1/user/usage` plus `GET /api/v1/user/usage/balance`.
+5. Start a trickle stream. Payments use the signer URL from the session and `Authorization: Bearer` set to the signer JWT.
+
+The signer JWT lasts about five minutes. This process refreshes the user access token with the refresh-token grant, exchanges it for a new signer JWT, and updates the bearer dict the gateway payment session already holds. Tokens stay in memory. Restarting ComfyUI requires Sign in again.
+
+No machine-client secret is stored here. Signer-session exchange authenticates with the user access token alone.
 
 ## Architecture
 
@@ -129,7 +151,11 @@ ComfyUI Node (sync)
 ```bash
 # Livepeer network
 ORCHESTRATOR_URL=https://orchestrator.example.com:8936
-SIGNER_URL=https://signer.eliteencoder.net  # optional
+SIGNER_URL=https://signer.example  # optional fallback when not signed in
+
+# PymtHouse public client
+PYMTHOUSE_ISSUER_URL=https://your-pymthouse.example/api/v1/oidc
+PYMTHOUSE_CLIENT_ID=app_your_public_client_id
 ```
 
 
@@ -189,5 +215,5 @@ livepeer-ai-nodes/
 ## Credits
 
 Built with:
-- [Livepeer Gateway Python SDK](https://github.com/j0sh/livepeer-python-gateway)
+- [Livepeer Gateway Python SDK](https://github.com/livepeer/livepeer-python-gateway)
 - [ComfyUI](https://github.com/Comfy-Org/ComfyUI)

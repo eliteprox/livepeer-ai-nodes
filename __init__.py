@@ -16,10 +16,20 @@ if str(ROOT_DIR) not in sys.path:
 
 WEB_DIRECTORY = "./nodes/js"
 
-# Import nodes - let errors propagate so they're visible in ComfyUI logs
-from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+# ComfyUI loads this directory as a package. Pytest also imports this file while
+# collecting tests, but the checkout directory name is not a Python package name,
+# so that import has no parent package. Keep the ComfyUI import strict.
+if __package__:
+    from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
-LOGGER.info("livepeer-ai-nodes loaded %d nodes: %s", len(NODE_CLASS_MAPPINGS), list(NODE_CLASS_MAPPINGS.keys()))
+    LOGGER.info(
+        "livepeer-ai-nodes loaded %d nodes: %s",
+        len(NODE_CLASS_MAPPINGS),
+        list(NODE_CLASS_MAPPINGS.keys()),
+    )
+else:
+    NODE_CLASS_MAPPINGS = {}
+    NODE_DISPLAY_NAME_MAPPINGS = {}
 
 __all__ = [
     "NODE_CLASS_MAPPINGS",

@@ -1,7 +1,7 @@
 import logging
 import sys
 
-from . import frame_nodes, stream_url_node, pipeline_config_sdxl, js
+from . import frame_nodes, stream_url_node, pipeline_config_sdxl, pymthouse_login, js
 
 
 def _configure_logging():
@@ -28,6 +28,8 @@ NODE_CLASS_MAPPINGS.update(stream_url_node.NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(stream_url_node.NODE_DISPLAY_NAME_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(pipeline_config_sdxl.NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(pipeline_config_sdxl.NODE_DISPLAY_NAME_MAPPINGS)
+NODE_CLASS_MAPPINGS.update(pymthouse_login.NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(pymthouse_login.NODE_DISPLAY_NAME_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(js.NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(js.NODE_DISPLAY_NAME_MAPPINGS)
 

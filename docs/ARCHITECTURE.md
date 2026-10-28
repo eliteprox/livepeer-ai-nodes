@@ -113,7 +113,7 @@ The `NetworkSubscriber` pulls output frames from the orchestrator:
 
 **Key features:**
 - Uses `MediaOutput` from Livepeer SDK
-- Calls `latest_video_frames()` to skip buffered frames
+- Calls `frames()` and keeps video frames; `MediaOutput` defaults to the newest segment when the reader falls behind
 - Stores latest frame in `TrickleOutputBridge`
 - Runs in asyncio loop (background thread)
 - Automatic reconnection on errors
@@ -197,7 +197,7 @@ TrickleFrameOutput (main thread)
 ```
 1. NetworkSubscriber._consume()
    ↓
-2. MediaOutput.latest_video_frames()
+2. MediaOutput.frames() (video frames only)
    ↓
 3. Decode av.VideoFrame → numpy
    ↓

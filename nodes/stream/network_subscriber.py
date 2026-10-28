@@ -27,7 +27,7 @@ class NetworkSubscriber:
 
     Follows the pattern from livepeer-python-gateway examples:
     - Uses MediaOutput for trickle subscription
-    - Uses latest_video_frames() to always get the freshest frame (skipping buffered ones)
+    - Uses frames() and keeps video frames; on_lag defaults to the newest segment
     - Decodes frames and stores them in a thread-safe bridge
     """
 
@@ -97,7 +97,7 @@ class NetworkSubscriber:
     async def _consume(self, subscribe_url: str) -> None:
         """
         Consume frames from the trickle subscriber and store them in the bridge.
-        Uses latest_video_frames() to always get the freshest frame.
+        Uses frames() and keeps video frames. LagPolicy.LATEST skips to the newest segment.
         """
         # Use print() to ensure visibility in console regardless of log level
         print(f"[SUBSCRIBER] Connecting to {subscribe_url} (start_seq={self.config.start_seq})")
@@ -116,13 +116,15 @@ class NetworkSubscriber:
             print("[SUBSCRIBER] MediaOutput created, starting to consume frames...")
             LOGGER.info("Subscriber MediaOutput created, starting to consume frames...")
             
-            # Use latest_video_frames() to skip buffered frames and always get the newest
-            async for decoded in output.latest_video_frames():
+            async for decoded in output.frames():
                 if not self._running:
                     print("[SUBSCRIBER] Stopped by running flag")
                     LOGGER.info("Subscriber stopped by running flag")
                     break
-                
+                if decoded.kind != "video":
+                    self.frames_skipped += 1
+                    continue
+
                 try:
                     frame = decoded.frame.to_ndarray(format="rgb24")
                     # Use thread-safe sync method since bridge is accessed from multiple threads
