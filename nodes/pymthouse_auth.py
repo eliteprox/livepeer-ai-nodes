@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -91,6 +91,32 @@ def set_bearer(headers: dict[str, str], access_token: str) -> None:
     headers["Authorization"] = f"Bearer {access_token}"
 
 
+def device_verification_url(url: str, settings: PymtHouseSettings) -> str:
+    """Allow production ComfyPeer's registered third-party login handoff.
+
+    Auth0's custom domain authenticates the website, not this public OIDC client.
+    Device polling and the eventual approval URL remain on the PymtHouse issuer.
+    """
+    target = urlparse(public_verification_url(url))
+    issuer = settings.issuer_url.rstrip('/')
+    if (issuer == 'https://pymthouse.com/api/v1/oidc'
+            and settings.client_id == 'app_444013b9d984f62f5572a282'
+            and target.scheme == 'https' and target.netloc == 'www.comfypeer.com'
+            and target.path == '/login' and not target.fragment):
+        query = parse_qs(target.query, keep_blank_values=True)
+        if query.get('iss') != [issuer] or len(query.get('target_link_uri', [])) != 1:
+            raise PymtHouseAuthError('ComfyPeer verification link has an invalid issuer or return URL.')
+        approval = same_origin_verification_url(query['target_link_uri'][0], issuer)
+        parsed = urlparse(approval)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        if (parsed.path != '/oidc/device' or params.get('client_id') != [settings.client_id]
+                or params.get('iss') != [issuer] or len(params.get('user_code', [])) != 1
+                or not params['user_code'][0]):
+            raise PymtHouseAuthError('ComfyPeer verification link has an invalid device approval URL.')
+        return target.geturl()
+    return same_origin_verification_url(url, issuer)
+
+
 def expires_at_from(expires_in: object, *, now: float, default_seconds: float) -> float:
     seconds = default_seconds
     if isinstance(expires_in, (int, float, str)):
@@ -112,10 +138,17 @@ def format_usage_summary(usage: Mapping[str, Any], balance: Mapping[str, Any]) -
             count = int(raw_count)
         except (TypeError, ValueError):
             count = 0
-    remaining = balance.get("remainingUsdMicros")
+    # spendableUsdMicros is prepaid credit plus remaining plan allowance.
+    # remainingUsdMicros is only the plan discount, which is $0 when the
+    # balance is a prepaid top-up.
+    remaining = balance.get("spendableUsdMicros")
+    if remaining is None:
+        remaining = balance.get("remainingUsdMicros")
     if remaining is None:
         remaining = balance.get("balanceUsdMicros")
     balance_text = "balance unavailable"
+    if isinstance(remaining, bool):
+        remaining = None
     if isinstance(remaining, int) or (isinstance(remaining, str) and remaining.lstrip("-").isdigit()):
         usd = int(remaining) / 1_000_000
         balance_text = f"${usd:.2f} remaining"
@@ -226,9 +259,9 @@ class PymtHouseClient:
             device_code=device_code,
             user_code=user_code,
             verification_uri=str(payload.get("verification_uri") or verification),
-            verification_uri_complete=same_origin_verification_url(
+            verification_uri_complete=device_verification_url(
                 verification,
-                self.settings.issuer_url,
+                self.settings,
             ),
             expires_in=float(payload.get("expires_in") or 600),
             interval=float(payload.get("interval") or 5),

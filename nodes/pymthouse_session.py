@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urlparse
 
 from .pymthouse_auth import (
     DeviceAuthorization,
@@ -30,6 +31,9 @@ USER_TOKEN_TTL_DEFAULT = 3600.0
 SIGNER_TOKEN_TTL_DEFAULT = 300.0
 REFRESH_SKEW_S = 60.0
 REFRESH_POLL_S = 15.0
+# Public catalog, one row per app. Runner metadata and URLs stay on the discovery inventory.
+OFFERINGS_URL = "https://engine-preview.up.railway.app/v1/offerings"
+DISCOVERY_URL_OVERRIDE = "https://discovery-preview.up.railway.app/discovery"
 
 
 @dataclass
@@ -46,6 +50,7 @@ class _LoginState:
     access_expires_at: float = 0.0
     signer_expires_at: float = 0.0
     signer_url: str = ""
+    discovery_url: str = ""
     signer_headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -112,6 +117,14 @@ class LoginSession:
     async def begin_login(self) -> dict[str, object]:
         runtime = self._ensure_runtime()
         return await runtime.await_coro(self._begin_login())
+
+    async def discovery_request(self) -> tuple[str, dict[str, str]]:
+        """Discovery URL and signer headers for the signed-in session.
+
+        The headers stay in this process. Callers must not send them to the browser.
+        """
+        runtime = self._ensure_runtime()
+        return await runtime.await_coro(self._discovery_request())
 
     async def refresh_usage(self) -> dict[str, object]:
         """Refresh the signed-in user's usage without exposing their JWT."""
@@ -215,6 +228,21 @@ class LoginSession:
         if signer_expires_at - now <= REFRESH_SKEW_S and access_token:
             await self._exchange_signer()
 
+    async def _discovery_request(self) -> tuple[str, dict[str, str]]:
+        if self.public_status()["status"] != "signed_in":
+            raise PymtHouseAuthError("Sign in to your ComfyPeer account first.")
+        await self._ensure_fresh()
+        with self._lock:
+            missing = not self._state.discovery_url and bool(self._state.access_token)
+        if missing:
+            await self._exchange_signer()
+        with self._lock:
+            url = DISCOVERY_URL_OVERRIDE or self._state.discovery_url
+            headers = dict(self._state.signer_headers)
+        if not url:
+            raise PymtHouseAuthError("Signer session did not include a discovery URL.")
+        return url, headers
+
     async def _refresh_usage(self) -> dict[str, object]:
         if self.public_status()["status"] != "signed_in":
             raise PymtHouseAuthError("Sign in to your ComfyPeer account first.")
@@ -264,6 +292,10 @@ class LoginSession:
         with self._lock:
             if isinstance(signer_url, str) and signer_url.strip():
                 self._state.signer_url = signer_url.strip()
+            self._state.discovery_url = discovery_url_from_session(
+                session.get("discovery_url"),
+                self._state.signer_url,
+            )
             self._state.signer_expires_at = expires_at_from(
                 session.get("expires_in"),
                 now=time.monotonic(),
@@ -315,6 +347,7 @@ class LoginSession:
             self._state.access_expires_at = 0.0
             self._state.signer_expires_at = 0.0
             self._state.signer_url = ""
+            self._state.discovery_url = ""
             self._state.signer_headers.clear()
         LOGGER.info("ComfyPeer sign-in error: %s", message)
 
@@ -334,6 +367,30 @@ def get_login_session() -> LoginSession:
         if _SESSION is None:
             _SESSION = LoginSession()
         return _SESSION
+
+
+def discovery_url_from_session(discovery_url: object, signer_url: str) -> str:
+    """Prefer the session's discovery_url, otherwise `{signer}/discover-orchestrators`."""
+    if isinstance(discovery_url, str) and discovery_url.strip():
+        return _http_url(discovery_url)
+    if signer_url.strip():
+        return discover_orchestrators_url(signer_url)
+    return ""
+
+
+def discover_orchestrators_url(signer_url: str) -> str:
+    parsed = urlparse(_http_url(signer_url))
+    path = parsed.path.rstrip("/")
+    if path == "/":
+        path = ""
+    return f"{parsed.scheme}://{parsed.netloc}{path}/discover-orchestrators"
+
+
+def _http_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        raise PymtHouseAuthError("Signer session discovery URL is invalid.")
+    return url.strip()
 
 
 def stream_signer(timeout: float = 20.0) -> Optional[tuple[str, dict[str, str]]]:

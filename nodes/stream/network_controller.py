@@ -373,6 +373,14 @@ class NetworkController:
         if client is not None and not client.closed:
             await client.close()
 
+    async def update_workflow(self, payload):
+        if not self.job or not self._ws_client:
+            raise RuntimeError("No open remote workflow session")
+        async with self._ws_client.post(self.job.app_url.rstrip("/") + "/update_stream", json=payload) as response:
+            if response.status >= 400:
+                raise RuntimeError(f"Workflow update failed HTTP {response.status}: {await response.text()}")
+            return await response.json()
+
     @staticmethod
     def _ws_url(app_url: str) -> str:
         parsed = urlparse(app_url.rstrip("/") + "/ws_stream")

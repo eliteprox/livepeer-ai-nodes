@@ -819,7 +819,7 @@ class TrickleFrameInput:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs) -> bool:
-        return True
+        return float("nan")
 
     def push_frame(self, image: torch.Tensor, publish_url: str = "", enabled: bool = True):
         if enabled:
@@ -933,7 +933,7 @@ class TrickleVideoInput:
     @classmethod
     def IS_CHANGED(cls, **kwargs) -> bool:
         # Always re-executes to allow connecting after stream starts
-        return True
+        return float("nan")
 
     def feed_video(
         self,
@@ -1168,18 +1168,18 @@ class UpdateTrickleStream:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return True
+        return float("nan")
 
     def update_trickle_stream(self, control_payload: Dict[str, Any], enabled: bool = True):
         if not enabled:
             return ()
         controller = _NETWORK_RUNTIME.controller
-        if not controller or not controller.job or not controller.job.control:
+        if not controller or not controller.job:
             LOGGER.warning("No active trickle stream control channel available")
             return ()
         try:
             future = asyncio.run_coroutine_threadsafe(
-                controller.job.control.write_control(control_payload),
+                controller.update_workflow(control_payload),
                 controller.loop,
             )
             future.result(timeout=5)

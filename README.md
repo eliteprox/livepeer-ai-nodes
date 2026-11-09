@@ -7,8 +7,7 @@ Real-time streaming for ComfyUI using the Livepeer gateway trickle protocol. Fra
 - 🎥 **Trickle publish/subscribe**: send/receive frames via Livepeer network
 - 🔄 **Bidirectional streaming nodes**: start, input, and output nodes for ComfyUI
 - ⚙️ **Configurable orchestrator/signer**: point at any Livepeer orchestrator, optional remote signer
-- 🔐 **ComfyPeer account control**: public device login, signer-session refresh, and usage outside the workflow graph
-- 🎨 **Remote API image nodes**: FAL Flux Schnell image batches and bounded SD Turbo / Flux Klein frame jobs
+- 🔐 **PymtHouse sign-in**: public device login, signer-session refresh, and usage on one node
 - 🧱 **FrameBridge**: sync→async bridge for safe node enqueue
 - 💡 **Pure Livepeer**: direct connection to orchestrators, no middleware required
 
@@ -57,29 +56,6 @@ After installation, you should see new nodes in the **"Trickle"** category.
 
 ## Quick Start
 
-### Creative remote workflows
-
-Load `workflows/botanical-signal-batch.json` or `workflows/botanical-signal-live.json`.
-Both connect **FAL Flux Schnell → SD Turbo → Flux Klein → image previews**.
-Sign in using the ComfyPeer account control, then enable `paid_execution` on each
-remote node when ready to run. Published templates leave paid execution disabled.
-The models run sequentially because they can share GPU capacity.
-
-Batch mode adapts the streaming endpoint; it is not a native batch inference API
-and exact per-image attribution is not guaranteed. Live mode publishes a bounded
-clip after inference warmup. The nodes check processed-frame counters and live
-output state before accepting an initial output, then stop funding and release
-sessions on completion or errors. Inspect `usage_report` for fallback statistics.
-
-Desktop users can put public issuer/client configuration in a node-local `.env`
-copied from `.env.example`; process environment takes precedence. Do not put a
-client secret or JWT in workflow JSON. Tokens stay in memory, so sign in again
-after restarting the server.
-
-Legacy StreamDiffusion config nodes remain available, but direct
-`streamdiffusion-sdxl` execution is unsupported by the current WebSocket controller.
-Use the dedicated remote frame nodes for SD Turbo and Klein.
-
 ### 1. Configure Orchestrator and PymtHouse
 
 Set environment variables:
@@ -111,7 +87,7 @@ Open **ComfyPeer account** in the lower-right of the ComfyUI canvas and select *
 2. Add `TrickleConfig` node:
    - Set orchestrator URL
    - Leave **Use ComfyPeer account** enabled for the signed-in user's billing
-   - Set model ID to `comfystream` for the WebSocket workflow transport
+   - Set model ID (for example, `streamdiffusion-sdxl` or `comfystream`)
    - Set FPS and keyframe interval
    - Connect `model_id_out` from a pipeline configuration to `pipeline_model_id` to select the pipeline automatically
 3. Add `StartTrickleStream` node:
