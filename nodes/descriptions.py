@@ -7,6 +7,7 @@ They do not read a runner's own prose.
 from __future__ import annotations
 
 import json
+import uuid
 from functools import lru_cache
 
 from livepeer_runner_contract import Registry
@@ -240,6 +241,40 @@ def _offering_summary(offer: dict, described) -> str:
     if offer["rate_status"] == "missing":
         parts.append("rate missing")
     return " · ".join(parts)
+
+
+def is_audio_choice(choice: dict) -> bool:
+    """Transcription and translation upload a file. Speech returns audio bytes."""
+    call = choice.get("call") or {}
+    content_type = call.get("content_type") or ""
+    framing = call.get("framing") or []
+    if "multipart" in content_type:
+        return True
+    return "json" in content_type and "binary" in framing
+
+
+def multipart_body(fields: dict, file_bytes: bytes, filename: str = "audio.wav") -> tuple[bytes, str]:
+    """Form body for a runner that takes the clip as ``file`` plus the other request fields."""
+    boundary = "livepeer" + uuid.uuid4().hex
+    parts = []
+    for name, value in fields.items():
+        if name == "file" or value is None:
+            continue
+        if isinstance(value, bool):
+            text = "true" if value else "false"
+        elif isinstance(value, str):
+            text = value
+        else:
+            text = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{text}\r\n".encode()
+        )
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
+        f"Content-Type: audio/wav\r\n\r\n".encode() + file_bytes + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
 def find_choice(catalog: dict, selected: str) -> dict | None:

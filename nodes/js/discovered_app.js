@@ -21,9 +21,16 @@ function readFields(box) {
     return values;
 }
 
+function audioChoice(choice) {
+    const type = choice?.call?.content_type || "";
+    const framing = choice?.call?.framing || [];
+    return type.includes("multipart") || (type.includes("json") && framing.includes("binary"));
+}
+
 function renderFields(box, choice, saved, message) {
     box.replaceChildren();
-    const fields = Array.isArray(choice?.fields) ? choice.fields : [];
+    const fields = (Array.isArray(choice?.fields) ? choice.fields : [])
+        .filter((field) => !(box.dataset.audio === "1" && field.name === "file"));
     if (!fields.length) {
         const note = document.createElement("div");
         note.textContent = choice ? "This capability has no request fields." : (message || "Pick a capability.");
@@ -57,13 +64,20 @@ function renderFields(box, choice, saved, message) {
         if (field.description) input.title = field.description;
         if (field.minimum != null) input.min = String(field.minimum);
         if (field.maximum != null) input.max = String(field.maximum);
-        const initial = saved && Object.prototype.hasOwnProperty.call(saved, field.name) ? saved[field.name] : field.default;
+        let initial = saved?.[field.name] ?? field.default;
+        if (box.dataset.audio === "1" && field.name === "model" && !saved?.model?.trim?.()) {
+            initial = choice.model?.name || initial;
+        }
         if (input.type === "checkbox") input.checked = Boolean(initial);
         else if (initial != null) input.value = typeof initial === "string" ? initial : JSON.stringify(initial).replace(/^"|"$/g, "");
         input.style.cssText = "width:100%;box-sizing:border-box;padding:4px 6px;color:#edf3ff;background:#0a1020;border:1px solid #4b5f87;border-radius:6px;";
         if (field.multiline) input.rows = 3;
-        input.addEventListener("input", () => box.widget?.callback?.(box.widget.value));
-        input.addEventListener("change", () => box.widget?.callback?.(box.widget.value));
+        const save = () => {
+            box.dataset.value = box.widget.value;
+            box.widget.callback?.(box.widget.value);
+        };
+        input.addEventListener("input", save);
+        input.addEventListener("change", save);
         row.append(input);
         box.append(row);
     }
@@ -81,20 +95,24 @@ function appPicker(node, inputName, inputData) {
     refresh.style.cssText = "padding:4px 8px;color:#edf3ff;background:#19233a;border:1px solid #4b5f87;border-radius:6px;cursor:pointer;";
     wrapper.append(input, refresh);
 
+    let selected = "";
     const widget = node.addDOMWidget(inputName, "LIVEPEER_APP", wrapper, {
-        getValue() { return input.value.trim(); },
+        getValue() { return selected; },
         setValue(value) {
-            input.value = value == null ? "" : String(value);
+            selected = value == null ? "" : String(value).trim();
+            fillSelect(node.livepeerCatalog);
             showFields();
         },
     });
 
     function fillSelect(catalog) {
-        const selected = input.value;
         input.replaceChildren();
         const blank = document.createElement("option");
         blank.value = "";
-        const choices = catalog?.choices || [];
+        const audioOnly = Boolean(node.constructor?.livepeerAudio);
+        const choices = (catalog?.choices || []).filter((choice) => (
+            audioOnly ? audioChoice(choice) : !audioChoice(choice)
+        ));
         blank.textContent = choices.length ? "Select a capability" : (catalog?.message || "No capabilities");
         input.append(blank);
         for (const choice of choices) {
@@ -128,14 +146,25 @@ function appPicker(node, inputName, inputData) {
         let saved = {};
         try { saved = JSON.parse(box.dataset.value || "{}"); } catch { saved = {}; }
         const catalog = node.livepeerCatalog;
-        const choice = choiceFor(catalog, input.value);
+        const choice = choiceFor(catalog, selected);
         const message = choice?.message || (catalog && !catalog.choices?.length ? catalog.message : "");
         renderFields(box, choice, saved, message);
         box.widget?.callback?.(box.widget.value);
     }
 
     fillSelect(null);
-    input.addEventListener("change", () => { widget.callback?.(widget.value); showFields(); });
+    input.addEventListener("change", () => {
+        const box = node.livepeerFields;
+        if (box?.dataset.audio === "1" && input.value !== selected) {
+            const values = readFields(box);
+            delete values.model;
+            delete values.voice;
+            box.dataset.value = JSON.stringify(values);
+        }
+        selected = input.value.trim();
+        widget.callback?.(widget.value);
+        showFields();
+    });
     refresh.addEventListener("pointerdown", (event) => { event.preventDefault(); event.stopPropagation(); });
     refresh.addEventListener("click", (event) => {
         event.preventDefault();
@@ -151,13 +180,16 @@ function fieldsWidget(node, inputName) {
     const box = document.createElement("div");
     box.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;";
     const widget = node.addDOMWidget(inputName, "LIVEPEER_FIELDS", box, {
-        getValue() { return JSON.stringify(readFields(box)); },
+        getValue() {
+            return box.querySelector("[data-field]") ? JSON.stringify(readFields(box)) : box.dataset.value || "{}";
+        },
         setValue(value) {
             box.dataset.value = value == null ? "{}" : String(value);
             node.livepeerShowFields?.();
         },
     });
     box.widget = widget;
+    if (node.constructor?.livepeerAudio) box.dataset.audio = "1";
     node.livepeerFields = box;
     node.livepeerShowFields?.();
     return { widget };
@@ -166,7 +198,8 @@ function fieldsWidget(node, inputName) {
 app.registerExtension({
     name: "Livepeer.DiscoveredApp",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "LivepeerRemoteFrames") return;
+        if (nodeData.name !== "LivepeerRemoteFrames" && nodeData.name !== "LivepeerRemoteAudio") return;
+        nodeType.livepeerAudio = nodeData.name === "LivepeerRemoteAudio";
         const appSpec = nodeData.input?.required?.app;
         if (appSpec) nodeData.input.required.app = ["LIVEPEER_APP", appSpec[1] || {}];
         const fields = nodeData.input?.optional?.fields;

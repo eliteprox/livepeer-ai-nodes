@@ -161,3 +161,57 @@ def test_offerings_are_one_choice_per_app():
     live = find_choice(described, "live/sd-turbo")
     assert live["call"]["path"] == "/stream"
     assert live["endpoint"] == "stream"
+
+
+TRANSCRIPT = {
+    "runner_contract": 1,
+    "deployment_revision": "sha256:" + "3" * 64,
+    "model": {"name": "whisper-1", "source": "hf:openai/whisper"},
+    "endpoints": {"transcriptions": {"profile": "openai.transcriptions.v1"}},
+    "runtime": {"image": "sha256:" + "4" * 64},
+}
+SPEECH = {
+    "runner_contract": 1,
+    "deployment_revision": "sha256:" + "5" * 64,
+    "model": {"name": "tts-1", "source": "hf:openai/tts"},
+    "endpoints": {"speech": {"profile": "openai.speech.v1"}},
+    "runtime": {"image": "sha256:" + "6" * 64},
+}
+
+
+def test_audio_jobs_upload_a_file_or_return_speech_bytes():
+    described = describe_offerings(
+        [
+            {"app": "transcription", "modes": ["single-shot"], "rate_low": _rate("seconds", "0.001"),
+             "rate_high": _rate("seconds", "0.002"), "rate_status": "available", "stale": False,
+             "runner_count": 1, "ready_count": 1},
+            {"app": "text-to-speech", "modes": ["single-shot"], "rate_low": _rate("seconds", "0.001"),
+             "rate_high": _rate("seconds", "0.002"), "rate_status": "available", "stale": False,
+             "runner_count": 1, "ready_count": 1},
+            {"app": "music", "modes": ["single-shot"], "rate_low": _rate("fixed", "0.02"),
+             "rate_high": _rate("fixed", "0.04"), "rate_status": "available", "stale": False,
+             "runner_count": 1, "ready_count": 1},
+        ],
+        [{"address": "https://ai.example:8936", "runners": [
+            runner("transcription", TRANSCRIPT, "https://ai.example/apps/transcription/app", unit="seconds"),
+            runner("text-to-speech", SPEECH, "https://ai.example/apps/speech/app", unit="seconds"),
+            runner("music", MUSIC, "https://ai.example/apps/music/app"),
+        ]}],
+    )
+    transcript = find_choice(described, "transcription")
+    speech = find_choice(described, "text-to-speech")
+    music = find_choice(described, "music")
+    assert _module.is_audio_choice(transcript)
+    assert _module.is_audio_choice(speech)
+    assert not _module.is_audio_choice(music)
+    assert transcript["call"]["content_type"] == "multipart/form-data"
+    assert transcript["call"]["path"] == "/v1/audio/transcriptions"
+    assert any(field["name"] == "file" and field["required"] for field in transcript["fields"])
+    assert speech["call"]["path"] == "/v1/audio/speech"
+    assert "binary" in speech["call"]["framing"]
+
+    body, content_type = _module.multipart_body({"model": "whisper-1", "file": "audio.wav"}, b"RIFF")
+    assert content_type.startswith("multipart/form-data; boundary=")
+    assert b'name="model"' in body and b"whisper-1" in body
+    assert b'name="file"; filename="audio.wav"' in body and b"RIFF" in body
+    assert b'name="file"\r\n\r\naudio.wav' not in body

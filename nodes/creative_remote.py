@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import io
 import json
+import wave
 from fractions import Fraction
 from urllib.parse import urlparse
 
@@ -28,7 +29,9 @@ from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig, Vid
 from livepeer_gateway.remote_signer import LivePaymentChallenge, LivePaymentSession, get_signer_info
 from livepeer_gateway.selection import runner_selector
 
-from .descriptions import build_request, describe_offerings, empty_catalog, find_choice
+from .descriptions import (
+    build_request, describe_offerings, empty_catalog, find_choice, is_audio_choice, multipart_body,
+)
 from .pymthouse_auth import PymtHouseAuthError
 from .pymthouse_session import DISCOVERY_URL_OVERRIDE, OFFERINGS_URL, get_login_session, stream_signer
 
@@ -498,9 +501,144 @@ class LivepeerFalImageBatch:
         return await generate()
 
 
+def _wav_bytes(audio) -> bytes:
+    waveform = audio["waveform"]
+    sample_rate = int(audio["sample_rate"])
+    clip = waveform[0].detach().cpu().to(torch.float32).clamp(-1, 1)
+    if clip.ndim == 1:
+        clip = clip.unsqueeze(0)
+    pcm = (clip.transpose(0, 1).contiguous().numpy() * 32767.0).astype("<i2")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(int(pcm.shape[1]))
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm.tobytes())
+    return buffer.getvalue()
+
+
+def _decode_audio(data: bytes, content_type: str = ""):
+    mime = content_type.split(";", 1)[0].strip().lower()
+    if mime == "audio/l16":
+        rate = 24000
+        for part in content_type.split(";")[1:]:
+            if part.strip().lower().startswith("rate="):
+                rate = int(part.split("=", 1)[1])
+        samples = np.frombuffer(data, dtype=">i2").astype(np.float32) / 32768.0
+        return {"waveform": torch.from_numpy(samples.copy()).view(1, 1, -1), "sample_rate": rate}
+    formats = {
+        "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
+        "audio/wave": "wav", "audio/flac": "flac", "audio/aac": "aac", "audio/opus": "ogg",
+    }
+    container_format = formats.get(mime)
+    opener = av.open(io.BytesIO(data), format=container_format) if container_format else av.open(io.BytesIO(data))
+    with opener as container:
+        if not container.streams.audio:
+            raise RuntimeError("Runner returned no audio")
+        stream = container.streams.audio[0]
+        channels = stream.channels
+        frames = []
+        for frame in container.decode(streams=stream.index):
+            buf = torch.from_numpy(frame.to_ndarray())
+            if buf.shape[0] != channels:
+                buf = buf.view(-1, channels).t()
+            frames.append(buf)
+        if not frames:
+            raise RuntimeError("Runner returned empty audio")
+        wav = torch.cat(frames, dim=1)
+        if wav.dtype.is_floating_point:
+            wav = wav.float()
+        elif wav.dtype == torch.int16:
+            wav = wav.float() / 32768.0
+        elif wav.dtype == torch.int32:
+            wav = wav.float() / 2147483648.0
+        else:
+            raise RuntimeError(f"Unsupported audio sample type {wav.dtype}")
+        return {"waveform": wav.unsqueeze(0), "sample_rate": int(stream.codec_context.sample_rate)}
+
+
+def _silent_audio():
+    return {"waveform": torch.zeros((1, 1, 1)), "sample_rate": 16000}
+
+
+def _answer_text(result) -> str:
+    if isinstance(result.data, dict) and isinstance(result.data.get("text"), str):
+        return result.data["text"]
+    content_type = result.content_type or ""
+    if result.content and ("text" in content_type or content_type in {"application/x-subrip", "text/vtt"}):
+        return bytes(result.content).decode("utf-8", errors="replace")
+    if isinstance(result.data, dict) and result.data:
+        return json.dumps(result.data)
+    return content_type
+
+
+class LivepeerRemoteAudio:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "app": ("STRING", {
+                "default": "",
+                "tooltip": "Transcription, translation, or speech. Pick a listed choice.",
+            }),
+            "timeout": ("INT", {"default": 120, "min": 5, "max": 600}),
+            "paid_execution": ("BOOLEAN", {"default": False}),
+        }, "optional": {
+            "audio": ("AUDIO",),
+            "fields": ("STRING", {"default": "{}", "multiline": True,
+                                  "tooltip": "Request fields for the selected app. The form fills this in."}),
+        }}
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "text")
+    FUNCTION = "run"
+    CATEGORY = "Livepeer/Remote API"
+
+    async def run(self, app, timeout, paid_execution, audio=None, fields="{}"):
+        app = app.strip() if isinstance(app, str) else ""
+        if not app:
+            raise ValueError("Pick a discovered capability")
+        try:
+            values = json.loads(fields) if isinstance(fields, str) and fields.strip() else {}
+        except ValueError as exc:
+            raise ValueError("Capability fields are not valid JSON") from exc
+        if not isinstance(values, dict):
+            raise ValueError("Capability fields must be a JSON object")
+        signer, headers = await asyncio.to_thread(_account, paid_execution)
+        catalog = await fetch_catalog()
+        if catalog.get("message") and not catalog.get("choices"):
+            raise RuntimeError(catalog["message"])
+        choice = find_choice(catalog, app)
+        if choice is None or not choice.get("call"):
+            raise RuntimeError((choice or {}).get("message") or f"No call description for {app}")
+        if not is_audio_choice(choice):
+            raise RuntimeError(f"{choice['label']} is not an audio job")
+        content_type = choice["call"].get("content_type") or ""
+        record = _ready_runner(choice)
+        if "multipart" in content_type:
+            if not isinstance(audio, dict) or "waveform" not in audio:
+                raise ValueError("Connect audio for this app")
+            values = {**values, "file": "audio.wav"}
+            form = build_request(choice, values, timeout=timeout)
+            form.pop("file", None)
+            payload, content_type = multipart_body(form, _wav_bytes(audio))
+        else:
+            payload = build_request(choice, values, prompt=values.get("input") or "", timeout=timeout)
+        result = await call_runner(
+            runner=_instance(record), runner_url=_join(record["url"], choice["call"]["path"]),
+            payload=payload, content_type=content_type if "multipart" in content_type else None,
+            method=choice["call"]["method"], signer_url=signer, signer_headers=headers,
+            timeout=timeout,
+        )
+        returned = result.content_type or ""
+        if returned.startswith("audio/") and result.content:
+            return _decode_audio(bytes(result.content), returned), returned
+        return _silent_audio(), _answer_text(result)
+
+
 register_discovery_routes()
 
 NODE_CLASS_MAPPINGS = {"LivepeerRemoteFrames": LivepeerRemoteFrames,
+                       "LivepeerRemoteAudio": LivepeerRemoteAudio,
                        "LivepeerFalImageBatch": LivepeerFalImageBatch}
 NODE_DISPLAY_NAME_MAPPINGS = {"LivepeerRemoteFrames": "Livepeer · SD Turbo / Flux Klein Frames",
+                              "LivepeerRemoteAudio": "Livepeer · Audio",
                               "LivepeerFalImageBatch": "Livepeer · FAL Image Batch"}
