@@ -64,20 +64,13 @@ function renderFields(box, choice, saved, message) {
         if (field.description) input.title = field.description;
         if (field.minimum != null) input.min = String(field.minimum);
         if (field.maximum != null) input.max = String(field.maximum);
-        let initial = saved?.[field.name] ?? field.default;
-        if (box.dataset.audio === "1" && field.name === "model" && !saved?.model?.trim?.()) {
-            initial = choice.model?.name || initial;
-        }
+        const initial = saved && Object.prototype.hasOwnProperty.call(saved, field.name) ? saved[field.name] : field.default;
         if (input.type === "checkbox") input.checked = Boolean(initial);
         else if (initial != null) input.value = typeof initial === "string" ? initial : JSON.stringify(initial).replace(/^"|"$/g, "");
         input.style.cssText = "width:100%;box-sizing:border-box;padding:4px 6px;color:#edf3ff;background:#0a1020;border:1px solid #4b5f87;border-radius:6px;";
         if (field.multiline) input.rows = 3;
-        const save = () => {
-            box.dataset.value = box.widget.value;
-            box.widget.callback?.(box.widget.value);
-        };
-        input.addEventListener("input", save);
-        input.addEventListener("change", save);
+        input.addEventListener("input", () => box.widget?.callback?.(box.widget.value));
+        input.addEventListener("change", () => box.widget?.callback?.(box.widget.value));
         row.append(input);
         box.append(row);
     }
@@ -95,17 +88,16 @@ function appPicker(node, inputName, inputData) {
     refresh.style.cssText = "padding:4px 8px;color:#edf3ff;background:#19233a;border:1px solid #4b5f87;border-radius:6px;cursor:pointer;";
     wrapper.append(input, refresh);
 
-    let selected = "";
     const widget = node.addDOMWidget(inputName, "LIVEPEER_APP", wrapper, {
-        getValue() { return selected; },
+        getValue() { return input.value.trim(); },
         setValue(value) {
-            selected = value == null ? "" : String(value).trim();
-            fillSelect(node.livepeerCatalog);
+            input.value = value == null ? "" : String(value);
             showFields();
         },
     });
 
     function fillSelect(catalog) {
+        const selected = input.value;
         input.replaceChildren();
         const blank = document.createElement("option");
         blank.value = "";
@@ -146,25 +138,14 @@ function appPicker(node, inputName, inputData) {
         let saved = {};
         try { saved = JSON.parse(box.dataset.value || "{}"); } catch { saved = {}; }
         const catalog = node.livepeerCatalog;
-        const choice = choiceFor(catalog, selected);
+        const choice = choiceFor(catalog, input.value);
         const message = choice?.message || (catalog && !catalog.choices?.length ? catalog.message : "");
         renderFields(box, choice, saved, message);
         box.widget?.callback?.(box.widget.value);
     }
 
     fillSelect(null);
-    input.addEventListener("change", () => {
-        const box = node.livepeerFields;
-        if (box?.dataset.audio === "1" && input.value !== selected) {
-            const values = readFields(box);
-            delete values.model;
-            delete values.voice;
-            box.dataset.value = JSON.stringify(values);
-        }
-        selected = input.value.trim();
-        widget.callback?.(widget.value);
-        showFields();
-    });
+    input.addEventListener("change", () => { widget.callback?.(widget.value); showFields(); });
     refresh.addEventListener("pointerdown", (event) => { event.preventDefault(); event.stopPropagation(); });
     refresh.addEventListener("click", (event) => {
         event.preventDefault();
@@ -180,9 +161,7 @@ function fieldsWidget(node, inputName) {
     const box = document.createElement("div");
     box.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;";
     const widget = node.addDOMWidget(inputName, "LIVEPEER_FIELDS", box, {
-        getValue() {
-            return box.querySelector("[data-field]") ? JSON.stringify(readFields(box)) : box.dataset.value || "{}";
-        },
+        getValue() { return JSON.stringify(readFields(box)); },
         setValue(value) {
             box.dataset.value = value == null ? "{}" : String(value);
             node.livepeerShowFields?.();
