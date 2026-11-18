@@ -1,12 +1,26 @@
-import logging
-import sys
+"""ComfyUI node registration.
 
-from . import frame_nodes, stream_url_node, pipeline_config_sdxl, pymthouse_login, creative_remote, remote_sessions, js
-from . import remote_workflow
-from . import session_recorder
+Importing this package must stay light. Auth and orchestrator resolution are
+imported by tests that cannot load ComfyUI or torch. Node classes are loaded
+only when ComfyUI asks for the mapping tables.
+"""
+
+from __future__ import annotations
+
+_MAPPINGS: tuple[dict, dict] | None = None
 
 
-def _configure_logging():
+def _load_node_mappings() -> tuple[dict, dict]:
+    global _MAPPINGS
+    if _MAPPINGS is not None:
+        return _MAPPINGS
+
+    import logging
+    import sys
+
+    from . import creative_remote, frame_nodes, js, pipeline_config_sdxl, pymthouse_login, remote_sessions
+    from . import remote_workflow, session_recorder, stream_url_node
+
     base_logger = logging.getLogger("comfyui_trickle")
     has_handler = any(getattr(handler, "_comfyui_trickle_handler", False) for handler in base_logger.handlers)
     if not has_handler:
@@ -17,32 +31,30 @@ def _configure_logging():
     base_logger.setLevel(logging.INFO)
     base_logger.propagate = True
 
+    class_mappings: dict = {}
+    display_mappings: dict = {}
+    for module in (
+        session_recorder,
+        remote_workflow,
+        creative_remote,
+        remote_sessions,
+        frame_nodes,
+        stream_url_node,
+        pipeline_config_sdxl,
+        pymthouse_login,
+        js,
+    ):
+        class_mappings.update(module.NODE_CLASS_MAPPINGS)
+        display_mappings.update(module.NODE_DISPLAY_NAME_MAPPINGS)
+    _MAPPINGS = (class_mappings, display_mappings)
+    return _MAPPINGS
 
-_configure_logging()
 
-
-NODE_CLASS_MAPPINGS = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
-NODE_CLASS_MAPPINGS.update(session_recorder.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(session_recorder.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(remote_workflow.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(remote_workflow.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(creative_remote.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(creative_remote.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(remote_sessions.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(remote_sessions.NODE_DISPLAY_NAME_MAPPINGS)
-
-NODE_CLASS_MAPPINGS.update(frame_nodes.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(frame_nodes.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(stream_url_node.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(stream_url_node.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(pipeline_config_sdxl.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(pipeline_config_sdxl.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(pymthouse_login.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(pymthouse_login.NODE_DISPLAY_NAME_MAPPINGS)
-NODE_CLASS_MAPPINGS.update(js.NODE_CLASS_MAPPINGS)
-NODE_DISPLAY_NAME_MAPPINGS.update(js.NODE_DISPLAY_NAME_MAPPINGS)
+def __getattr__(name: str):
+    if name in {"NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"}:
+        class_mappings, display_mappings = _load_node_mappings()
+        return class_mappings if name == "NODE_CLASS_MAPPINGS" else display_mappings
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
-

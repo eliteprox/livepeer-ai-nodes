@@ -94,12 +94,21 @@
         "Node name for S&R": "TrickleConfig"
       },
       "widgets_values": [
-        "https://ai.eliteencoder.net:8936",
-        "https://signer.eliteencoder.net",
-        "noop",
+        "",
+        "",
+        "comfystream",
+        true,
         30,
         2
-      ]
+      ],
+      "widgets_values_named": {
+        "orchestrator_url": "",
+        "signer_url": "",
+        "model_id": "comfystream",
+        "use_comfypeer_account": true,
+        "fps": 30,
+        "keyframe_interval": 2
+      }
     },
     {
       "id": 41,

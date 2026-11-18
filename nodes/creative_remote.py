@@ -30,13 +30,12 @@ from livepeer_gateway.remote_signer import LivePaymentChallenge, LivePaymentSess
 from livepeer_gateway.selection import runner_selector
 
 from .descriptions import (
-    build_request, describe_offerings, empty_catalog, find_choice, is_audio_choice, multipart_body,
+    build_request, describe_discovery, describe_offerings, empty_catalog, find_choice, is_audio_choice,
+    multipart_body,
 )
 from .pymthouse_auth import PymtHouseAuthError
-from .pymthouse_session import DISCOVERY_URL_OVERRIDE, OFFERINGS_URL, get_login_session, stream_signer
+from .pymthouse_session import get_login_session, offerings_url_from_env, stream_signer
 
-DISCOVERY = DISCOVERY_URL_OVERRIDE
-OFFERINGS = OFFERINGS_URL
 APPS = ["comfystream/sd-turbo", "comfystream/flux-klein"]
 
 
@@ -65,18 +64,23 @@ def discovered_apps(payload):
 
 
 async def fetch_catalog():
-    """One choice per offering, with forms from discovery metadata and the runner pool."""
+    """One choice per offering, or discovery alone when no offerings URL is set."""
     try:
-        _url, headers = await get_login_session().discovery_request()
+        discovery_url, headers = await get_login_session().discovery_request()
+        offerings_url = offerings_url_from_env()
     except PymtHouseAuthError as exc:
         return empty_catalog(exc.message)
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as http:
-            offerings = await _get_json(http, OFFERINGS)
-            discovery = await _get_json(http, DISCOVERY, headers)
+            offerings = await _get_json(http, offerings_url) if offerings_url else None
+            discovery = await _get_json(http, discovery_url, headers)
     except Exception:
-        return empty_catalog("Could not read offerings.")
+        return empty_catalog(
+            "Could not read discovery." if not offerings_url else "Could not read offerings."
+        )
     try:
+        if offerings is None:
+            return describe_discovery(discovery)
         return describe_offerings(offerings, discovery)
     except Exception as exc:
         return empty_catalog(str(exc))
@@ -417,9 +421,11 @@ class LivepeerRemoteFrames:
             arrays = (images.detach().cpu().numpy()[:, :, :, :3].clip(0, 1) * 255).astype(np.uint8)
             arrays = np.stack([np.asarray(Image.fromarray(image).resize((512, 512))).copy() for image in arrays])
 
+            discovery_url, _ = await get_login_session().discovery_request()
+
             async def legacy():
                 return await asyncio.wait_for(_frames(arrays, app, prompt, mode, seconds, fps, timeout,
-                                                       signer, headers, DISCOVERY), timeout=timeout + seconds + 10)
+                                                       signer, headers, discovery_url), timeout=timeout + seconds + 10)
             frames, report = await legacy()
             return _tensor(frames), json.dumps(report)
 
@@ -442,8 +448,9 @@ class LivepeerRemoteFrames:
             width = int(values.get("width") or 512)
             height = int(values.get("height") or 512)
             arrays = np.stack([np.asarray(Image.fromarray(image).resize((width, height))).copy() for image in arrays])
+            discovery_url, _ = await get_login_session().discovery_request()
             frames, report = await _frames(arrays, record["app"], prompt, mode, seconds, fps, timeout,
-                                            signer, headers, DISCOVERY, channels={"in": urls[0], "out": urls[1]})
+                                            signer, headers, discovery_url, channels={"in": urls[0], "out": urls[1]})
             report["call"] = choice["call"]
             return _tensor(frames), json.dumps(report)
         encoded = _decode_images(data)
@@ -472,9 +479,10 @@ class LivepeerFalImageBatch:
         signer, headers = _account(paid_execution)
         async def generate():
             frames, receipts = [], []
+            discovery_url, _ = await get_login_session().discovery_request()
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as http:
                 for index in range(count):
-                    cursor = await runner_selector(discovery_url=DISCOVERY,
+                    cursor = await runner_selector(discovery_url=discovery_url,
                         app="comfystream/fal-flux-schnell", signer_url=signer, signer_headers=headers,
                         body={"prompt": prompt, "num_images": 1, "seed": seed + index,
                               "image_size": "square_hd"}, timeout=180)

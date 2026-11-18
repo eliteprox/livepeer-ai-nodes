@@ -19,7 +19,7 @@ Technical architecture documentation covering:
 ## Quick Links
 
 - [Main README](../README.md) - Installation and quick start guide
-- [Workflows](../workflows/) - Example workflow files
+- [Workflows](https://www.comfypeer.com/docs) - Starter graphs downloaded from ComfyPeer. `workflows/` is the installed copy.
 - [Tests](../tests/) - Unit tests and test documentation
 
 ## Key Concepts
@@ -130,9 +130,11 @@ orch_url, signer_url = resolve_network_config(
 ```
 
 Resolves orchestrator and signer URLs from:
-1. Explicit parameters (from TrickleConfig node)
-2. Environment variables (`ORCHESTRATOR_URL`, `SIGNER_URL`)
-3. Hardcoded defaults
+1. An explicit orchestrator parameter, except a blank value or `https://localhost:8935`
+2. `ORCHESTRATOR_URL` when that variable is non-blank
+3. The signed-in discovery inventory when no override is set
+
+There is no built-in orchestrator host. The signer URL stays optional.
 
 ## Contributing
 

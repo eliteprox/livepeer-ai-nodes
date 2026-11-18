@@ -221,18 +221,20 @@ def resolve_network_config(
 ) -> Tuple[str, str]:
     """
     Preference order:
-    1. Explicit parameters (from TrickleConfig node)
-    2. Environment variables
-    3. Hardcoded defaults
+    1. Explicit TrickleConfig orchestrator, except blank and https://localhost:8935
+    2. ORCHESTRATOR_URL when it is non-blank
+    3. Signed-in discovery inventory
     """
 ```
 
 ### Configuration Resolution
 
-Orchestrator/signer URLs are resolved from:
-1. **TrickleConfig node inputs** (primary method)
-2. **Environment variables**: `ORCHESTRATOR_URL`, `SIGNER_URL`
-3. **Hardcoded defaults** (for development)
+Orchestrator URLs are resolved from:
+1. **TrickleConfig orchestrator field**, when it is a real override
+2. **`ORCHESTRATOR_URL`**, when the field is not an override
+3. **Discovery** from the signed-in session, preferring an HTTPS orchestrator with capacity
+
+There is no built-in orchestrator host. The signer URL is still optional and may fall back to the local signer.
 
 ## Thread Safety
 

@@ -39,12 +39,76 @@ function statusText(payload) {
     return "Not signed in";
 }
 
+const HIDDEN_KEYS = new Set([
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "token",
+    "authorization",
+    "signer_headers",
+    "client_secret",
+]);
+
+function withoutSecrets(value) {
+    if (Array.isArray(value)) return value.map(withoutSecrets);
+    if (!value || typeof value !== "object") return value;
+    const copy = {};
+    for (const [key, item] of Object.entries(value)) {
+        if (HIDDEN_KEYS.has(String(key).toLowerCase())) continue;
+        copy[key] = withoutSecrets(item);
+    }
+    return copy;
+}
+
+function explainText(explain) {
+    if (typeof explain === "string") return explain.trim();
+    if (!explain || typeof explain !== "object") return "";
+    const headline = typeof explain.headline === "string" ? explain.headline.trim() : "";
+    const detail = typeof explain.detail === "string" ? explain.detail.trim() : "";
+    return [headline, detail].filter(Boolean).join("\n");
+}
+
+function billingNotice(payload) {
+    const records = [payload?.balance, payload?.usage];
+    for (const record of records) {
+        if (!record || typeof record !== "object") continue;
+        const candidates = [record, record.billingState, record.billing_state].filter(
+            (candidate) => candidate && typeof candidate === "object",
+        );
+        const status = candidates
+            .map((candidate) => candidate.status)
+            .find((value) => value === "at_risk" || value === "blocked");
+        if (!status) continue;
+        const text = candidates.map((candidate) => explainText(candidate.explain)).find(Boolean);
+        if (text) return { status, text };
+    }
+    return null;
+}
+
 function usageText(payload) {
-    const data = { usage: payload?.usage || {}, balance: payload?.balance || {} };
+    const data = {
+        usage: withoutSecrets(payload?.usage || {}),
+        balance: withoutSecrets(payload?.balance || {}),
+    };
     if (!Object.keys(data.usage).length && !Object.keys(data.balance).length) {
         return "Usage details appear here after you sign in.";
     }
     return JSON.stringify(data, null, 2);
+}
+
+function safeVerificationUrl(value) {
+    let url;
+    try {
+        url = new URL(value);
+    } catch {
+        return "";
+    }
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    const host = url.hostname;
+    if (!host.includes(".") || host === "localhost" || !/^[a-z0-9.-]+$/i.test(host)) return "";
+    if (!url.pathname.startsWith("/") || url.pathname.startsWith("//") || url.pathname.includes("\\")) return "";
+    const port = url.port ? `:${url.port}` : "";
+    return `https://${host}${port}${url.pathname}${url.search}`;
 }
 
 function setBusy(busy) {
@@ -58,13 +122,19 @@ function render(payload = latestStatus) {
     const signedIn = Boolean(latestStatus.signed_in);
     const pending = latestStatus.status === "pending";
     control.status.textContent = statusText(latestStatus);
+    const notice = billingNotice(latestStatus);
+    control.explain.hidden = !notice;
+    control.explain.textContent = notice ? notice.text : "";
+    if (notice) control.explain.dataset.state = notice.status;
+    else delete control.explain.dataset.state;
     control.details.textContent = usageText(latestStatus);
     control.userCode.textContent = pending && latestStatus.user_code ? `Code: ${latestStatus.user_code}` : "";
     control.refresh.hidden = !signedIn;
     control.signOut.hidden = !signedIn;
     control.signIn.hidden = signedIn || pending;
-    control.openVerification.hidden = !pending || !latestStatus.verification_uri_complete;
-    control.openVerification.href = latestStatus.verification_uri_complete || "#";
+    const verificationUrl = safeVerificationUrl(latestStatus.verification_uri_complete);
+    control.openVerification.hidden = !pending || !verificationUrl;
+    control.openVerification.href = verificationUrl || "#";
     control.badge.dataset.state = signedIn ? "signed-in" : pending ? "pending" : "idle";
     control.badge.textContent = signedIn ? "Connected" : pending ? "Awaiting approval" : "Not connected";
     setBusy(false);
@@ -106,9 +176,14 @@ async function signIn() {
         const payload = await request(LOGIN_PATH, { method: "POST" });
         render(payload);
         if (payload.status === "pending") {
-            const popup = window.open(payload.verification_uri_complete, "_blank", "noopener,noreferrer");
-            if (!popup) {
-                showToast("info", "Open device sign-in", "Use the Open secure sign-in link in the account panel.", 7000);
+            const verificationUrl = safeVerificationUrl(payload.verification_uri_complete);
+            if (!verificationUrl) {
+                showToast("error", "ComfyPeer sign-in", "The sign-in link was not a valid https URL.", 7000);
+            } else {
+                const popup = window.open(verificationUrl, "_blank", "noopener,noreferrer");
+                if (!popup) {
+                    showToast("info", "Open device sign-in", "Use the Open secure sign-in link in the account panel.", 7000);
+                }
             }
             showToast("info", "Approve sign-in", `Enter code ${payload.user_code} in the browser.`, 8000);
             startPolling();
@@ -172,6 +247,9 @@ function installControl() {
         #livepeer-account-panel a { color: #9bc2ff; }
         #livepeer-account-panel pre { max-height: 145px; overflow: auto; padding: 8px; color: #c7d7f4; background: #0a1020; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
         #livepeer-account-panel .lp-muted { color: #9fb0cd; font-size: 12px; }
+        #livepeer-account-panel .lp-explain { margin: 8px 0; white-space: pre-wrap; }
+        #livepeer-account-panel .lp-explain[data-state="at_risk"] { color: #F5A524; }
+        #livepeer-account-panel .lp-explain[data-state="blocked"] { color: #FF4D4D; }
     `;
     document.head.append(style);
 
@@ -189,6 +267,7 @@ function installControl() {
                 <button type="button" data-role="sign-out" hidden>Sign out</button>
             </div>
             <p class="lp-muted">Usage and balance are read with your account JWT. Tokens are never shown or saved in the workflow.</p>
+            <p class="lp-explain" data-role="explain" hidden></p>
             <pre data-role="details">Usage details appear here after you sign in.</pre>
         </div>
         <button type="button" data-role="toggle" aria-expanded="false">ComfyPeer account</button>
@@ -205,6 +284,7 @@ function installControl() {
         openVerification: root.querySelector('[data-role="verification"]'),
         refresh: root.querySelector('[data-role="refresh"]'),
         signOut: root.querySelector('[data-role="sign-out"]'),
+        explain: root.querySelector('[data-role="explain"]'),
         details: root.querySelector('[data-role="details"]'),
     };
     control.toggle.addEventListener("click", () => {

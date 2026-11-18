@@ -18,6 +18,16 @@ TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
 ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 SIGN_IN_SCOPE = "openid sign:job"
 ISSUER_SUFFIX = "/api/v1/oidc"
+DEFAULT_ISSUER_URL = "https://pymthouse.com/api/v1/oidc"
+DEFAULT_PUBLIC_CLIENT_ID = "app_444013b9d984f62f5572a282"
+_MISSING_SETTINGS = (
+    "Set PYMTHOUSE_ISSUER_URL and COMFYPEER_PUBLIC_CLIENT_ID before signing in."
+)
+_CLIENT_ID_ENV_KEYS = (
+    "COMFYPEER_PUBLIC_CLIENT_ID",
+    "PYMTHOUSE_PUBLIC_CLIENT_ID",
+    "PYMTHOUSE_CLIENT_ID",
+)
 
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -156,27 +166,33 @@ def format_usage_summary(usage: Mapping[str, Any], balance: Mapping[str, Any]) -
     return f"{balance_text}, {requests}"
 
 
+def _present_setting(env: Mapping[str, str], key: str) -> str | None:
+    """Return a non-blank override, or None when the key is absent.
+
+    A present key that strips to empty is an explicit blank override.
+    """
+    if key not in env or env.get(key) is None:
+        return None
+    value = env.get(key)
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        raise PymtHouseAuthError(_MISSING_SETTINGS)
+    return text
+
+
 def load_settings_from_env(env: Mapping[str, str]) -> PymtHouseSettings:
-    issuer_url = (env.get("PYMTHOUSE_ISSUER_URL") or "").strip()
     # ComfyPeer is the public desktop client.  Keep the older name as a
     # compatibility fallback for existing ComfyUI installations; none of
     # these values are a client secret.
+    issuer_url = _present_setting(env, "PYMTHOUSE_ISSUER_URL") or DEFAULT_ISSUER_URL
     client_id = next(
         (
-            value.strip()
-            for key in (
-                "COMFYPEER_PUBLIC_CLIENT_ID",
-                "PYMTHOUSE_PUBLIC_CLIENT_ID",
-                "PYMTHOUSE_CLIENT_ID",
-            )
-            if (value := env.get(key)) and value.strip()
+            text
+            for key in _CLIENT_ID_ENV_KEYS
+            if (text := _present_setting(env, key))
         ),
-        "",
+        DEFAULT_PUBLIC_CLIENT_ID,
     )
-    if not issuer_url or not client_id:
-        raise PymtHouseAuthError(
-            "Set PYMTHOUSE_ISSUER_URL and COMFYPEER_PUBLIC_CLIENT_ID before signing in."
-        )
     api_origin(issuer_url)
     return PymtHouseSettings(
         issuer_url=issuer_url.rstrip("/"),

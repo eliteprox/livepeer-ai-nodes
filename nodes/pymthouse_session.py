@@ -7,13 +7,16 @@ device-flow state and the account's own usage data.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Mapping, Optional
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .pymthouse_auth import (
     DeviceAuthorization,
@@ -31,9 +34,10 @@ USER_TOKEN_TTL_DEFAULT = 3600.0
 SIGNER_TOKEN_TTL_DEFAULT = 300.0
 REFRESH_SKEW_S = 60.0
 REFRESH_POLL_S = 15.0
-# Public catalog, one row per app. Runner metadata and URLs stay on the discovery inventory.
-OFFERINGS_URL = "https://engine-preview.up.railway.app/v1/offerings"
-DISCOVERY_URL_OVERRIDE = "https://discovery-preview.up.railway.app/discovery"
+# Staging overrides. Production uses the signer session's discovery URL and
+# skips the offerings catalog when COMFYPEER_OFFERINGS_URL is unset.
+ENV_DISCOVERY_URL = "COMFYPEER_DISCOVERY_URL"
+ENV_OFFERINGS_URL = "COMFYPEER_OFFERINGS_URL"
 
 
 @dataclass
@@ -237,11 +241,17 @@ class LoginSession:
         if missing:
             await self._exchange_signer()
         with self._lock:
-            url = DISCOVERY_URL_OVERRIDE or self._state.discovery_url
+            session_url = self._state.discovery_url
             headers = dict(self._state.signer_headers)
+        url = discovery_url_from_env() or session_url
         if not url:
             raise PymtHouseAuthError("Signer session did not include a discovery URL.")
         return url, headers
+
+    def discovery_inventory(self, timeout: float = 8.0):
+        """Signed-in discovery document. The bearer stays in this process."""
+        url, headers = self._ensure_runtime().run(self._discovery_request(), timeout=timeout)
+        return read_discovery_inventory(url, headers, timeout=timeout)
 
     async def _refresh_usage(self) -> dict[str, object]:
         if self.public_status()["status"] != "signed_in":
@@ -367,6 +377,58 @@ def get_login_session() -> LoginSession:
         if _SESSION is None:
             _SESSION = LoginSession()
         return _SESSION
+
+
+def discovery_url_from_env(env: Mapping[str, str] | None = None) -> str:
+    """Optional staging override. Blank means use the signer session URL."""
+    source = os.environ if env is None else env
+    raw = source.get(ENV_DISCOVERY_URL)
+    if not isinstance(raw, str) or not raw.strip():
+        return ""
+    return _http_url(raw)
+
+
+def offerings_url_from_env(env: Mapping[str, str] | None = None) -> str:
+    """Optional offerings catalog. Blank means describe discovery alone."""
+    source = os.environ if env is None else env
+    raw = source.get(ENV_OFFERINGS_URL)
+    if not isinstance(raw, str) or not raw.strip():
+        return ""
+    return _http_url(raw)
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def read_discovery_inventory(url: str, headers: Mapping[str, str], timeout: float = 8.0):
+    """GET a discovery document without forwarding the bearer across redirects."""
+    safe_headers = {}
+    for key, value in headers.items():
+        name = str(key)
+        text = str(value)
+        if any(char in name or char in text for char in ("\r", "\n")):
+            raise PymtHouseAuthError("Could not read orchestrator discovery.")
+        safe_headers[name] = text
+    request = Request(
+        _http_url(url),
+        headers=safe_headers,
+        method="GET",
+    )
+    opener = build_opener(_RejectRedirects)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read(1_000_001)
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise PymtHouseAuthError("Could not read orchestrator discovery.") from exc
+    if len(body) > 1_000_000:
+        raise PymtHouseAuthError("Could not read orchestrator discovery.")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PymtHouseAuthError("Could not read orchestrator discovery.") from exc
+    return payload
 
 
 def discovery_url_from_session(discovery_url: object, signer_url: str) -> str:

@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import cv2
 
+from .pymthouse_auth import PymtHouseAuthError
 from .pymthouse_session import get_login_session, stream_signer
 from .stream.credentials import resolve_network_config
 from .stream.frame_bridge import enqueue_tensor_frame, enqueue_tensor_batch, queue_depth, has_loop, FRAME_BRIDGE
@@ -169,6 +170,11 @@ def _get_controller(config: NetworkControllerConfig) -> NetworkController:
     return controller
 
 
+def _load_discovery_inventory():
+    """Discovery document for the signed-in account. Bearer stays in-process."""
+    return get_login_session().discovery_inventory()
+
+
 def _get_subscriber(start_seq: int, loop: asyncio.AbstractEventLoop) -> NetworkSubscriber:
     if _NETWORK_RUNTIME.subscriber:
         _NETWORK_RUNTIME.subscriber.attach_loop(loop)
@@ -196,8 +202,8 @@ class TrickleConfig:
         return {
             "required": {
                 "orchestrator_url": ("STRING", {
-                    "default": "https://localhost:8935",
-                    "tooltip": "Orchestrator URL (e.g., https://hky.eliteencoder.net:8936)",
+                    "default": "",
+                    "tooltip": "Leave blank to use discovery.",
                 }),
                 "signer_url": ("STRING", {
                     "default": "https://signer.eliteencoder.net",
@@ -339,6 +345,11 @@ class StartTrickleStream:
         # This triggers re-execution when stream dies
         return f"{state.value}_{running}_{cls._stream_generation}"
 
+    def _startup_error(self, error_msg: str):
+        _NETWORK_RUNTIME.last_startup_error = error_msg
+        self._status_cache = ("", "", "", error_msg)
+        return {"ui": {"text": [f"ERROR: {error_msg}"]}, "result": self._status_cache}
+
     def _stop_stream(self):
         """
         Stop the current stream, reset tracking, and return notification.
@@ -446,7 +457,7 @@ class StartTrickleStream:
         self._check_and_clear_stale_stream()
 
         # Extract values from config
-        orchestrator_url = config.get("orchestrator_url", "https://localhost:8935")
+        orchestrator_url = config.get("orchestrator_url") or ""
         signer_url = config.get("signer_url", "")
         model_id = config.get("model_id", "streamdiffusion-sdxl")
         use_comfypeer_account = bool(config.get("use_comfypeer_account", True))
@@ -474,10 +485,21 @@ class StartTrickleStream:
                 _NETWORK_RUNTIME.last_startup_error = error_msg
                 self._status_cache = ("", "", "", error_msg)
                 return {"ui": {"text": [f"ERROR: {error_msg}"]}, "result": self._status_cache}
-            resolved_orch, _ = resolve_network_config(orchestrator_url, signer_url)
+            try:
+                resolved_orch, _ = resolve_network_config(
+                    orchestrator_url,
+                    signer_url,
+                    signed_in=True,
+                    discovery_loader=_load_discovery_inventory,
+                )
+            except (ValueError, PymtHouseAuthError) as exc:
+                return self._startup_error(str(exc))
             resolved_signer, signer_headers = session_signer
         else:
-            resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
+            try:
+                resolved_orch, resolved_signer = resolve_network_config(orchestrator_url, signer_url)
+            except ValueError as exc:
+                return self._startup_error(str(exc))
             signer_headers = None
         controller_config = NetworkControllerConfig(
             orchestrator_url=resolved_orch,
